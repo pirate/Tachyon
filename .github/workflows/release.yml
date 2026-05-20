@@ -9,9 +9,25 @@ permissions:
   contents: read
 
 jobs:
+  check_release_type:
+    name: Evaluate Release Tag
+    runs-on: ubuntu-24.04
+    outputs:
+      is_stable: ${{ steps.check.outputs.is_stable }}
+    steps:
+      - name: Check Release Tag
+        id: check
+        run: |
+          if [[ "${{ github.ref_name }}" =~ -(rc|alpha|beta) ]]; then
+            echo "is_stable=false" >> $GITHUB_OUTPUT
+          else
+            echo "is_stable=true" >> $GITHUB_OUTPUT
+          fi
+
   python_sdist:
     name: Build sdist + Publish PyPI
     runs-on: ubuntu-24.04
+    needs: [ check_release_type ]
     permissions:
       id-token: write
       contents: read
@@ -58,21 +74,16 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to PyPI
-        if: |
-          !contains(github.ref_name, '-rc') &&
-          !contains(github.ref_name, '-alpha') &&
-          !contains(github.ref_name, '-beta')
+        if: needs.check_release_type.outputs.is_stable == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: bindings/python/dist/
 
   rust_publish:
     name: Publish crates.io
-    if: |
-      !contains(github.ref_name, '-rc') &&
-      !contains(github.ref_name, '-alpha') &&
-      !contains(github.ref_name, '-beta')
     runs-on: ubuntu-24.04
+    needs: [ check_release_type ]
+    if: needs.check_release_type.outputs.is_stable == 'true'
     permissions:
       contents: read
       id-token: write
@@ -116,11 +127,9 @@ jobs:
 
   go_publish:
     name: Tag Go Module
-    if: |
-      !contains(github.ref_name, '-rc') &&
-      !contains(github.ref_name, '-alpha') &&
-      !contains(github.ref_name, '-beta')
     runs-on: ubuntu-24.04
+    needs: [ check_release_type ]
+    if: needs.check_release_type.outputs.is_stable == 'true'
     permissions:
       contents: write
 
@@ -259,13 +268,9 @@ jobs:
 
   java_publish:
     name: Publish Fat JAR to Maven Central
-    needs: [ java_native_linux, java_native_macos ]
     runs-on: ubuntu-24.04
-    if: |
-      !contains(github.ref_name, '-rc') &&
-      !contains(github.ref_name, '-alpha') &&
-      !contains(github.ref_name, '-beta')
-
+    needs: [ check_release_type, java_native_linux, java_native_macos ]
+    if: needs.check_release_type.outputs.is_stable == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -306,13 +311,9 @@ jobs:
 
   kotlin_publish:
     name: Publish Fat JAR to Maven Central
-    needs: [ java_native_linux, java_native_macos ]
     runs-on: ubuntu-24.04
-    if: |
-      !contains(github.ref_name, '-rc') &&
-      !contains(github.ref_name, '-alpha') &&
-      !contains(github.ref_name, '-beta')
-
+    needs: [ check_release_type, java_native_linux, java_native_macos ]
+    if: needs.check_release_type.outputs.is_stable == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -427,12 +428,9 @@ jobs:
 
   nodejs_publish:
     name: Publish Node.js to NPM
-    needs: [ nodejs_prebuilt ]
     runs-on: ubuntu-24.04
-    if: |
-      !contains(github.ref_name, '-rc') &&
-      !contains(github.ref_name, '-alpha') &&
-      !contains(github.ref_name, '-beta')
+    needs: [ check_release_type, nodejs_prebuilt ]
+    if: needs.check_release_type.outputs.is_stable == 'true'
     permissions:
       contents: read
       id-token: write
@@ -563,16 +561,12 @@ jobs:
 
   csharp_publish:
     name: NuGet Publish
-    needs: [ csharp_native_linux, csharp_native_macos ]
     runs-on: ubuntu-24.04
-    if: |
-      !contains(github.ref_name, '-rc') &&
-      !contains(github.ref_name, '-alpha') &&
-      !contains(github.ref_name, '-beta')
+    needs: [ check_release_type, csharp_native_linux, csharp_native_macos ]
+    if: needs.check_release_type.outputs.is_stable == 'true'
     permissions:
       id-token: write
       contents: read
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
