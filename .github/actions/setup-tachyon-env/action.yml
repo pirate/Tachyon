@@ -85,15 +85,17 @@ runs:
     - name: Export environments
       shell: bash
       run: |
+        echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+        echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
         if [ "${{ runner.os }}" = "Linux" ]; then
           if [ "${{ inputs.compiler }}" = "gcc" ]; then
-            echo "CC=ccache gcc-${{ inputs.gcc-version }}" >> $GITHUB_ENV
-            echo "CXX=ccache g++-${{ inputs.gcc-version }}" >> $GITHUB_ENV
+            echo "CC=gcc-${{ inputs.gcc-version }}" >> $GITHUB_ENV
+            echo "CXX=g++-${{ inputs.gcc-version }}" >> $GITHUB_ENV
           elif [ "${{ inputs.compiler }}" = "clang" ]; then
-            echo "CC=ccache clang-${{ inputs.llvm-version }}" >> $GITHUB_ENV
-            echo "CXX=ccache clang++-${{ inputs.llvm-version }}" >> $GITHUB_ENV
+            echo "CC=clang-${{ inputs.llvm-version }}" >> $GITHUB_ENV
+            echo "CXX=clang++-${{ inputs.llvm-version }}" >> $GITHUB_ENV
           fi
         else
-          echo "CC=ccache clang" >> $GITHUB_ENV
-          echo "CXX=ccache clang++" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
         fi
