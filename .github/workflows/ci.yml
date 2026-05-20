@@ -370,10 +370,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install Compiler
-        uses: ./.github/actions/gcc-installer
+      - name: Setup Native Core
+        uses: ./.github/actions/setup-native-core
         with:
-          version: '16'
+          lang: 'go'
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -381,21 +381,18 @@ jobs:
           go-version: '1.23'
           cache-dependency-path: 'bindings/go'
 
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh go
-
       - name: Go Test
         env:
-          CXX: g++-16
-          CC: gcc-16
+          CC: clang-21
+          CXX: clang++-21
           CGO_ENABLED: "1"
         working-directory: bindings/go
         run: go test -v -count=1 -timeout=120s ./tachyon/...
 
       - name: Go Vet
         env:
-          CXX: g++-16
-          CC: gcc-16
+          CC: clang-21
+          CXX: clang++-21
           CGO_ENABLED: "1"
         working-directory: bindings/go
         run: go vet ./tachyon/...
@@ -412,14 +409,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Native Core
+        uses: ./.github/actions/setup-native-core
+        with:
+          lang: 'go'
+
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           go-version: '1.23'
           cache-dependency-path: 'bindings/go'
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh go
 
       - name: Go Test
         env:
@@ -433,19 +432,21 @@ jobs:
         working-directory: bindings/go
         run: go vet ./tachyon/...
 
-  java:
-    name: Java bindings (Linux)
+  jvm:
+    name: JVM bindings (${{ matrix.lang }}, Linux)
     runs-on: ubuntu-24.04
-
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [ java, kotlin ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
+      - name: Setup Native Core
+        uses: ./.github/actions/setup-native-core
+        with:
+          lang: 'java'
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -454,11 +455,8 @@ jobs:
           java-version: '21'
           cache: 'gradle'
           cache-dependency-path: |
-            bindings/java/*.gradle*
-            bindings/java/**/gradle-wrapper.properties
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh java
+            bindings/${{ matrix.lang }}/*.gradle*
+            bindings/${{ matrix.lang }}/**/gradle-wrapper.properties
 
       - name: Build Native library
         env:
@@ -469,19 +467,25 @@ jobs:
           cmake --build --preset clang-ci --target tachyon_java_resources
 
       - name: Gradle Test
-        working-directory: bindings/java
+        working-directory: bindings/${{ matrix.lang }}
         run: ./gradlew test --no-daemon
 
-  java_macos:
-    name: Java bindings (${{ matrix.runner }})
+  jvm_macos:
+    name: JVM bindings (${{ matrix.lang }}, ${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         runner: [ macos-26, macos-26-intel ]
+        lang: [ java, kotlin ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Setup Native Core
+        uses: ./.github/actions/setup-native-core
+        with:
+          lang: 'java'
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -490,11 +494,8 @@ jobs:
           java-version: '21'
           cache: 'gradle'
           cache-dependency-path: |
-            bindings/java/*.gradle*
-            bindings/java/**/gradle-wrapper.properties
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh java
+            bindings/${{ matrix.lang }}/*.gradle*
+            bindings/${{ matrix.lang }}/**/gradle-wrapper.properties
 
       - name: Build Native library
         run: |
@@ -502,79 +503,7 @@ jobs:
           cmake --build --preset macos-ci --target tachyon_java_resources --parallel
 
       - name: Gradle Test
-        working-directory: bindings/java
-        run: ./gradlew test --no-daemon
-
-  kotlin:
-    name: Kotlin bindings (Linux)
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
-          cache-dependency-path: |
-            bindings/kotlin/*.gradle*
-            bindings/kotlin/**/gradle-wrapper.properties
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh java
-
-      - name: Build Native library
-        env:
-          CC: clang-21
-          CXX: clang++-21
-        run: |
-          cmake --preset clang-ci
-          cmake --build --preset clang-ci --target tachyon_java_resources
-
-      - name: Gradle Test
-        working-directory: bindings/kotlin
-        run: ./gradlew test --no-daemon
-
-  kotlin_macos:
-    name: Kotlin bindings (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ macos-26, macos-26-intel ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
-          cache-dependency-path: |
-            bindings/kotlin/*.gradle*
-            bindings/kotlin/**/gradle-wrapper.properties
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh java
-
-      - name: Build Native library
-        run: |
-          cmake --preset macos-ci
-          cmake --build --preset macos-ci --target tachyon_java_resources --parallel
-
-      - name: Gradle Test
-        working-directory: bindings/kotlin
+        working-directory: bindings/${{ matrix.lang }}
         run: ./gradlew test --no-daemon
 
   nodejs:
@@ -588,11 +517,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
+      - name: Setup Native Core
+        uses: ./.github/actions/setup-native-core
+        with:
+          lang: 'node'
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -600,9 +528,6 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
           cache-dependency-path: bindings/node/package-lock.json
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh node
 
       - name: Install dependencies & build native library
         working-directory: bindings/node
@@ -643,15 +568,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Native Core
+        uses: ./.github/actions/setup-native-core
+        with:
+          lang: 'node'
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
           cache-dependency-path: bindings/node/package-lock.json
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh node
 
       - name: Install dependencies & build native library
         working-directory: bindings/node
@@ -684,11 +611,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
+      - name: Setup Native Core
+        uses: ./.github/actions/setup-native-core
+        with:
+          lang: 'c#'
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -696,9 +622,6 @@ jobs:
           dotnet-version: |
             8.x
             10.x
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh c#
 
       - name: Build native library
         env:
@@ -726,7 +649,13 @@ jobs:
       matrix:
         runner: [ macos-26, macos-26-intel ]
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Native Core
+        uses: ./.github/actions/setup-native-core
+        with:
+          lang: 'c#'
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -734,9 +663,6 @@ jobs:
           dotnet-version: |
             8.x
             10.x
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh c#
 
       - name: Build Native library
         run: |
