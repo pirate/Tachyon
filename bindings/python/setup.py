@@ -121,6 +121,7 @@ ext_modules = [
         ],
         libraries=libraries,
         extra_compile_args=compile_args,
+        extra_link_args=["-flto"],
         language="c++",
     )
 ]
