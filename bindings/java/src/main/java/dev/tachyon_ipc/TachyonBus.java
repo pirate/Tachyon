@@ -215,4 +215,8 @@ public final class TachyonBus implements AutoCloseable {
 			throw new IllegalStateException("TachyonBus is closed");
 		}
 	}
+
+	MemorySegment handle() {
+		return busHandle;
+	}
 }

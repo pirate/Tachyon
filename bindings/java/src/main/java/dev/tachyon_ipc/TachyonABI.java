@@ -23,7 +23,7 @@ final class TachyonABI {
 	private static final Linker linker;
 
 	/**
-	 * The symbol table lookup restricted to the loaded Tachyon shared library context.
+	 * The symbol table lookup restricted to the loaded Tachyon-shared library context.
 	 */
 	private static final SymbolLookup lookup;
 
@@ -46,7 +46,7 @@ final class TachyonABI {
 	 */
 	private static MethodHandle downcall(String name, FunctionDescriptor descriptor) {
 		MemorySegment symbol = lookup.find(name).orElseThrow(() ->
-				new UnsatisfiedLinkError("Native symbol not found: " + name)
+				new UnsatisfiedLinkError(STR."Native symbol not found: \{name}")
 		);
 		return linker.downcallHandle(symbol, descriptor);
 	}
@@ -232,6 +232,72 @@ final class TachyonABI {
 			FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
 
 	/**
+	 * Maps to: {@code TACHYON_ABI tachyon_error_t tachyon_star_create(tachyon_bus_t**, size_t, int*, tachyon_star_t**)}
+	 */
+	private static final MethodHandle MH_STAR_CREATE = downcall("tachyon_star_create",
+			FunctionDescriptor.of(
+					ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+					ValueLayout.ADDRESS, ValueLayout.ADDRESS
+			));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI void tachyon_star_destroy(tachyon_star_t*)}
+	 */
+	private static final MethodHandle MH_STAR_DESTROY = downcall("tachyon_star_destroy",
+			FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI size_t tachyon_star_poll(tachyon_star_t*, tachyon_msg_view_t*, size_t, uint64_t, size_t*)}
+	 */
+	private static final MethodHandle MH_STAR_POLL = downcall("tachyon_star_poll",
+			FunctionDescriptor.of(
+					ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+					ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS
+			));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI tachyon_error_t tachyon_star_commit(tachyon_star_t*)}
+	 */
+	private static final MethodHandle MH_STAR_COMMIT = downcall("tachyon_star_commit",
+			FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI void *tachyon_star_acquire_tx(tachyon_star_t*, size_t, size_t)}
+	 */
+	private static final MethodHandle MH_STAR_ACQUIRE_TX = downcall("tachyon_star_acquire_tx",
+			FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI tachyon_error_t tachyon_star_commit_tx(tachyon_star_t*, size_t, size_t, uint32_t)}
+	 */
+	private static final MethodHandle MH_STAR_COMMIT_TX = downcall("tachyon_star_commit_tx",
+			FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI tachyon_error_t tachyon_star_rollback_tx(tachyon_star_t*, size_t)}
+	 */
+	private static final MethodHandle MH_STAR_ROLLBACK_TX = downcall("tachyon_star_rollback_tx",
+			FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI void tachyon_star_flush(tachyon_star_t*, size_t)}
+	 */
+	private static final MethodHandle MH_STAR_FLUSH = downcall("tachyon_star_flush",
+			FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI tachyon_state_t tachyon_star_get_state(tachyon_star_t*, size_t)}
+	 */
+	private static final MethodHandle MH_STAR_GET_STATE = downcall("tachyon_star_get_state",
+			FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+
+	/**
+	 * Maps to: {@code TACHYON_ABI void tachyon_star_n_spokes(tachyon_star_t*)}
+	 */
+	private static final MethodHandle MH_STAR_N_SPOKES = downcall("tachyon_star_n_spokes",
+			FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+
+	/**
 	 * Value record holding the parameters of a successful blocking receive operation.
 	 *
 	 * @param payload    The bounded memory segment pointing to the message.
@@ -263,7 +329,7 @@ final class TachyonABI {
 	private static RuntimeException handleException(Throwable t, String methodName) {
 		if (t instanceof RuntimeException re) throw re;
 		if (t instanceof Error e) throw e;
-		return new RuntimeException("Fatal error invoking " + methodName, t);
+		return new RuntimeException(STR."Fatal error invoking \{methodName}", t);
 	}
 
 	/**
@@ -274,7 +340,6 @@ final class TachyonABI {
 	 * @return The memory segment pointing to the opaque native bus handle.
 	 * @implSpec Uses a confined arena to safely allocate the output pointer during the FFI transition.
 	 */
-	@SuppressWarnings("removal")
 	static MemorySegment busListen(MemorySegment path, long capacity) {
 		try (Arena arena = Arena.ofConfined()) {
 			MemorySegment outBus = arena.allocate(ValueLayout.ADDRESS);
@@ -287,12 +352,11 @@ final class TachyonABI {
 	}
 
 	/**
-	 * Invokes the native connect instruction to map an existing shared memory arena.
+	 * Invokes the native connection instruction to map an existing shared memory arena.
 	 *
 	 * @param path The memory segment containing the UDS socket path.
 	 * @return The memory segment pointing to the opaque native bus handle.
 	 */
-	@SuppressWarnings("removal")
 	static MemorySegment busConnect(MemorySegment path) {
 		try (Arena arena = Arena.ofConfined()) {
 			MemorySegment outBus = arena.allocate(ValueLayout.ADDRESS);
@@ -805,6 +869,183 @@ final class TachyonABI {
 			return (int) MH_RPC_GET_STATE.invokeExact(handle);
 		} catch (Throwable t) {
 			throw handleException(t, "tachyon_rpc_get_state");
+		}
+	}
+
+	/**
+	 * Creates a star bus aggregating the given native bus handles with optional NUMA binding.
+	 *
+	 * @param busHandles The native {@code tachyon_bus_t*} pointers, one per spoke.
+	 * @param nodeIds    Optional NUMA node IDs; {@code null} disables NUMA binding entirely.
+	 *                   Negative values skip binding for the corresponding spoke.
+	 * @return The memory segment pointing to the opaque native {@code tachyon_star_t} handle.
+	 * @throws TachyonException if SHM mapping or TSC calibration fails.
+	 */
+	static MemorySegment starCreate(MemorySegment[] busHandles, int[] nodeIds) {
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment busArray = arena.allocate(ValueLayout.ADDRESS.byteSize() * busHandles.length);
+			for (int i = 0; i < busHandles.length; i++) {
+				busArray.setAtIndex(ValueLayout.ADDRESS, i, busHandles[i]);
+			}
+
+			MemorySegment nodeIdsPtr = nodeIds != null
+					? arena.allocate(ValueLayout.JAVA_INT.byteSize() * nodeIds.length)
+					: MemorySegment.NULL;
+
+			if (nodeIds != null) {
+				for (int i = 0; i < nodeIds.length; i++) {
+					nodeIdsPtr.setAtIndex(ValueLayout.JAVA_INT, i, nodeIds[i]);
+				}
+			}
+
+			MemorySegment outPtr = arena.allocate(ValueLayout.ADDRESS);
+			checkError((int) MH_STAR_CREATE.invokeExact(busArray, (long) busHandles.length, nodeIdsPtr, outPtr));
+			return outPtr.get(ValueLayout.ADDRESS, 0);
+		} catch (Throwable throwable) {
+			throw handleException(throwable, "tachyon_star_create");
+		}
+	}
+
+	/**
+	 * Tears down the native star bus and releases all internal bus references.
+	 *
+	 * @param handle The native {@code tachyon_star_t} pointer.
+	 */
+	static void starDestroy(MemorySegment handle) {
+		try {
+			MH_STAR_DESTROY.invokeExact(handle);
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_destroy");
+		}
+	}
+
+	/**
+	 * Drains up to {@code maxTotal} messages across all spokes within {@code budgetUs} microseconds.
+	 *
+	 * @param handle          The native {@code tachyon_star_t} pointer.
+	 * @param viewsSeg        Pre-allocated array of at least {@code maxTotal} {@code tachyon_msg_view_t} structs.
+	 * @param maxTotal        Upper bound on messages to drain in one call.
+	 * @param budgetUs        TSC-bounded polling budget in microseconds.
+	 * @param spokeIndicesSeg Pre-allocated array of at least {@code maxTotal} {@code size_t} values to receive spoke indices.
+	 * @return The number of messages drained, or {@code 0} if the budget expires with no data.
+	 */
+	static long starPoll(
+			MemorySegment handle, MemorySegment viewsSeg, long maxTotal, long budgetUs, MemorySegment spokeIndicesSeg
+	) {
+		try {
+			return (long) MH_STAR_POLL.invokeExact(handle, viewsSeg, maxTotal, budgetUs, spokeIndicesSeg);
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_poll");
+		}
+	}
+
+	/**
+	 * Publishes the consumer tail for all spokes that had messages in the last {@link #starPoll} call.
+	 * Uses internal {@code pending_} state, the view's array is not passed back.
+	 *
+	 * @param handle The native {@code tachyon_star_t} pointer.
+	 * @throws TachyonException if the star is in fatal error state.
+	 */
+	static void starCommit(MemorySegment handle) {
+		try {
+			checkError((int) MH_STAR_COMMIT.invokeExact(handle));
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_commit");
+		}
+	}
+
+	/**
+	 * Requests an exclusive memory slot from the producer arena of spoke {@code spokeIdx}.
+	 *
+	 * @param handle   The native {@code tachyon_star_t} pointer.
+	 * @param spokeIdx The zero-based spoke index.
+	 * @param maxSize  The required contiguous byte capacity.
+	 * @return A memory segment for zero-copy writes, or a zero-address segment if the ring is full or {@code spokeIdx}
+	 * is out of range.
+	 */
+	static MemorySegment starAcquireTx(MemorySegment handle, long spokeIdx, long maxSize) {
+		try {
+			return (MemorySegment) MH_STAR_ACQUIRE_TX.invokeExact(handle, spokeIdx, maxSize);
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_acquire_tx");
+		}
+	}
+
+	/**
+	 * Commits the TX slot acquired via {@link #starAcquireTx} and flushes the spoke arena.
+	 * No separate flush call is required.
+	 *
+	 * @param handle     The native {@code tachyon_star_t} pointer.
+	 * @param spokeIdx   The zero-based spoke index.
+	 * @param actualSize The number of bytes written to the slot.
+	 * @param typeId     The user-defined protocol identifier.
+	 * @throws TachyonException if no slot was acquired or {@code actualSize} exceeds the reservation.
+	 */
+	static void starCommitTx(MemorySegment handle, long spokeIdx, long actualSize, int typeId) {
+		try {
+			checkError((int) MH_STAR_COMMIT_TX.invokeExact(handle, spokeIdx, actualSize, typeId));
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_commit_tx");
+		}
+	}
+
+	/**
+	 * Aborts the TX slot acquired via {@link #starAcquireTx} without publishing.
+	 *
+	 * @param handle   The native {@code tachyon_star_t} pointer.
+	 * @param spokeIdx The zero-based spoke index.
+	 * @throws TachyonException if no slot was acquired.
+	 */
+	static void starRollbackTx(MemorySegment handle, long spokeIdx) {
+		try {
+			checkError((int) MH_STAR_ROLLBACK_TX.invokeExact(handle, spokeIdx));
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_rollback_tx");
+		}
+	}
+
+	/**
+	 * Notifies sleeping consumers on spoke {@code spokeIdx} via a futex wake-up signal.
+	 * Not needed after {@link #starCommitTx}, which flushes internally.
+	 *
+	 * @param handle   The native {@code tachyon_star_t} pointer.
+	 * @param spokeIdx The zero-based spoke index.
+	 */
+	static void starFlush(MemorySegment handle, long spokeIdx) {
+		try {
+			MH_STAR_FLUSH.invokeExact(handle, spokeIdx);
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_flush");
+		}
+	}
+
+	/**
+	 * Reads the internal atomic state of the C++ arena for spoke {@code spokeIdx}.
+	 *
+	 * @param handle   The native {@code tachyon_star_t} pointer.
+	 * @param spokeIdx The zero-based spoke index.
+	 * @return The integer value of the {@code tachyon_state_t} enumeration, {@code TACHYON_STATE_UNKNOWN} (0)
+	 * if {@code spokeIdx} is out of range.
+	 */
+	static int starGetState(MemorySegment handle, long spokeIdx) {
+		try {
+			return (int) MH_STAR_GET_STATE.invokeExact(handle, spokeIdx);
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_get_state");
+		}
+	}
+
+	/**
+	 * Returns the number of spokes in the star bus.
+	 *
+	 * @param handle The native {@code tachyon_star_t} pointer.
+	 * @return The spoke count as a {@code long} (native {@code size_t}).
+	 */
+	static long starNSpokes(MemorySegment handle) {
+		try {
+			return (long) MH_STAR_N_SPOKES.invokeExact(handle);
+		} catch (Throwable t) {
+			throw handleException(t, "tachyon_star_n_spokes");
 		}
 	}
 }
