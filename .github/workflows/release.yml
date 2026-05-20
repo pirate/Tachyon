@@ -127,6 +127,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
 
       - name: Derive Go module tag
         id: gotag
@@ -146,8 +147,6 @@ jobs:
             { echo "unexpected module path: ${MODULE}"; exit 1; }
 
       - name: Push Go module tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           GO_TAG="${{ steps.gotag.outputs.tag }}"
           git config user.name  "github-actions[bot]"
@@ -598,7 +597,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main
           fetch-depth: 0
 
       - name: Download Python sdist
@@ -687,7 +685,7 @@ jobs:
 
       - name: Create GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
           PRERELEASE_FLAG=""
