@@ -227,4 +227,47 @@ internal static unsafe partial class TachyonNative
 
     [LibraryImport(Lib)]
     internal static partial TachyonState tachyon_rpc_get_state(nint rpc);
+
+    [LibraryImport(Lib)]
+    internal static partial TachyonError tachyon_star_create(
+        nint* buses,
+        nuint n,
+        int* nodeIds,
+        nint* outStar);
+
+    [LibraryImport(Lib)]
+    internal static partial void tachyon_star_destroy(nint star);
+
+    [LibraryImport(Lib)]
+    internal static partial nuint tachyon_star_poll(
+        nint star,
+        TachyonMsgView* views,
+        nuint maxTotal,
+        ulong budgetUs,
+        nuint* outSpokeIndices);
+
+    [LibraryImport(Lib)]
+    internal static partial TachyonError tachyon_star_commit(nint star);
+
+    [LibraryImport(Lib)]
+    internal static partial void* tachyon_star_acquire_tx(nint star, nuint spokeIdx, nuint maxSize);
+
+    [LibraryImport(Lib)]
+    internal static partial TachyonError tachyon_star_commit_tx(
+        nint star,
+        nuint spokeIdx,
+        nuint actualSize,
+        uint typeId);
+
+    [LibraryImport(Lib)]
+    internal static partial TachyonError tachyon_star_rollback_tx(nint star, nuint spokeIdx);
+
+    [LibraryImport(Lib)]
+    internal static partial void tachyon_star_flush(nint star, nuint spokeIdx);
+
+    [LibraryImport(Lib)]
+    internal static partial TachyonState tachyon_star_get_state(nint star, nuint spokeIdx);
+
+    [LibraryImport(Lib)]
+    internal static partial nuint tachyon_star_n_spokes(nint star);
 }
