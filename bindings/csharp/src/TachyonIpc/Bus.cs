@@ -227,6 +227,16 @@ public sealed unsafe class Bus : IDisposable
             TachyonNative.tachyon_bus_destroy(bus);
     }
 
+    internal nint Handle
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            ThrowIfDisposed();
+            return _bus;
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ThrowIfDisposed()
     {
