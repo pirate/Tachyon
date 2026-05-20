@@ -18,16 +18,18 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        preset: [fuzz, fuzz-msan, fuzz-tsan, fuzz-ubsan]
+        preset: [ fuzz, fuzz-msan, fuzz-tsan, fuzz-ubsan ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'cpp'
+          compiler: 'clang'
+          build-type: 'debug'
+          sanitizer: ${{ matrix.preset }}
 
       - name: Build Instrumented libc++
         if: matrix.preset == 'fuzz-msan'

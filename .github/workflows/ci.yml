@@ -20,32 +20,16 @@ jobs:
       matrix:
         compiler: [ gcc, clang ]
         build_type: [ debug, release ]
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup ccache
-        uses: ./.github/actions/setup-ccache
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
-          build_type: ${{ matrix.build_type }}
+          lang: 'cpp'
           compiler: ${{ matrix.compiler }}
-
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install Toolchain (GCC)
-        if: matrix.compiler == 'gcc'
-        uses: ./.github/actions/gcc-installer
-        with:
-          version: '16'
-
-      - name: Install Toolchain (Clang)
-        if: matrix.compiler == 'clang'
-        run: bash ci/install_llvm.sh 21
+          build-type: ${{ matrix.build_type }}
 
       - name: Configure (${{ matrix.compiler }}-${{ matrix.build_type}})
         run: |
@@ -60,27 +44,19 @@ jobs:
   cpp_aarch64:
     name: C++ (clang, release, aarch64)
     runs-on: ubuntu-24.04
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup ccache
-        uses: ./.github/actions/setup-ccache
-
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'cpp'
 
       - name: Install aarch64 toolchain
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libstdc++-14-dev-arm64-cross
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
 
       - name: Configure
         run: cmake --preset clang-aarch64-release -DTACHYON_ENABLE_BENCH=OFF
@@ -93,102 +69,41 @@ jobs:
           file build/clang-aarch64-release/core/libtachyon.so | grep -q "aarch64" || \
             (echo "Error: not an aarch64 elf." && exit 1)
 
-  cpp_asan:
-    name: C++ ASan (Clang 21, Debug, x86-64)
+  cpp_sanitizers:
+    name: C++ Sanitizer (${{ matrix.sanitizer }}, Clang 21, Debug)
     runs-on: ubuntu-24.04
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [ asan, msan, tsan ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup ccache
-        uses: ./.github/actions/setup-ccache
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'cpp'
+          build-type: 'debug'
+          sanitizer: ${{ matrix.sanitizer }}
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
+      - name: Build instrumented libc++
+        if: matrix.sanitizer == 'msan'
+        run: bash ci/build_msan_libcxx.sh 21
 
       - name: Configure
-        run: cmake --preset asan -DTACHYON_ENABLE_BENCH=OFF
+        run: cmake --preset ${{ matrix.sanitizer }} -DTACHYON_ENABLE_BENCH=OFF
 
       - name: Build
-        run: cmake --build --preset asan --parallel
+        run: cmake --build --preset ${{ matrix.sanitizer }} --parallel
 
       - name: Test
         env:
           ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:print_stacktrace=1"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1:print_summary=1"
-        run: ctest --test-dir build/asan/test --output-on-failure --parallel 1
-
-  cpp_msan:
-    name: C++ MSan (Clang 21, Debug, x86-64)
-    runs-on: ubuntu-24.04
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup ccache
-        uses: ./.github/actions/setup-ccache
-
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
-
-      - name: Build Instrumented libc++
-        run: bash ci/build_msan_libcxx.sh 21
-
-      - name: Configure
-        run: cmake --preset msan -DTACHYON_ENABLE_BENCH=OFF
-
-      - name: Build
-        run: cmake --build --preset msan --parallel
-
-      - name: Test
-        env:
           MSAN_OPTIONS: "abort_on_error=1:print_stacktrace=1"
-        run: ctest --test-dir build/msan/test --output-on-failure --parallel 1
-
-  cpp_tsan:
-    name: C++ TSan (Clang 21, Debug, x86-64)
-    runs-on: ubuntu-24.04
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup ccache
-        uses: ./.github/actions/setup-ccache
-
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
-
-      - name: Configure
-        run: cmake --preset tsan -DTACHYON_ENABLE_BENCH=OFF
-
-      - name: Build
-        run: cmake --build --preset tsan --parallel
-
-      - name: Test
-        env:
           TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1 history_size=5"
-        run: ctest --test-dir build/tsan/test --output-on-failure --parallel 1
+        run: ctest --test-dir build/${{ matrix.sanitizer }}/test --output-on-failure --parallel 1
 
   cpp_macos:
     name: C++ macOS (${{ matrix.runner }}, ${{ matrix.build_type }})
@@ -198,10 +113,15 @@ jobs:
       matrix:
         runner: [ macos-26, macos-26-intel ]
         build_type: [ debug, release ]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'cpp'
+          build-type: ${{ matrix.build_type }}
 
       - name: Configure
         run: cmake --preset macos-${{ matrix.build_type }} -DTACHYON_ENABLE_BENCH=OFF
@@ -219,16 +139,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
-
-      - name: Install Clang Format
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends clang-format-21
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'cpp'
 
       - name: Format Check
         run: find core/ benchmark/ test/ fuzz/ tools/ -name '*.cpp' -o -name '*.hpp' | xargs clang-format-21 --dry-run --Werror
@@ -236,22 +150,14 @@ jobs:
   tachyon_top:
     name: Tachyon Top
     runs-on: ubuntu-24.04
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup ccache
-        uses: ./.github/actions/setup-ccache
-
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'cpp'
 
       - name: Configure
         run: cmake --preset tachyon-top-ci
@@ -278,10 +184,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install Compiler
-        uses: ./.github/actions/gcc-installer
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
-          version: '16'
+          lang: 'python'
 
       - name: Install system dependencies
         run: |
@@ -294,7 +200,7 @@ jobs:
       - name: Install and test
         run: |
           python3 -m venv .venv
-          CXX=g++-16 CC=gcc-16 .venv/bin/pip install ./bindings/python pytest
+          .venv/bin/pip install ./bindings/python pytest
           .venv/bin/pytest bindings/python/tests/ -v
 
   python_macos:
@@ -304,10 +210,14 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ macos-26, macos-26-intel ]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'python'
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -323,23 +233,19 @@ jobs:
   rust:
     name: Rust bindings (Linux)
     runs-on: ubuntu-24.04
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install Compiler
-        uses: ./.github/actions/gcc-installer
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
-          version: '16'
+          lang: 'rust'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Test
-        env:
-          CXX: g++-16
-          CC: gcc-16
         run: cargo test
         working-directory: bindings/rust
 
@@ -350,10 +256,14 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ macos-26, macos-26-intel ]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'rust'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -370,8 +280,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Native Core
-        uses: ./.github/actions/setup-native-core
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
           lang: 'go'
 
@@ -383,16 +293,12 @@ jobs:
 
       - name: Go Test
         env:
-          CC: clang-21
-          CXX: clang++-21
           CGO_ENABLED: "1"
         working-directory: bindings/go
         run: go test -v -count=1 -timeout=120s ./tachyon/...
 
       - name: Go Vet
         env:
-          CC: clang-21
-          CXX: clang++-21
           CGO_ENABLED: "1"
         working-directory: bindings/go
         run: go vet ./tachyon/...
@@ -404,13 +310,12 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ macos-26, macos-26-intel ]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Native Core
-        uses: ./.github/actions/setup-native-core
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
           lang: 'go'
 
@@ -443,8 +348,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Native Core
-        uses: ./.github/actions/setup-native-core
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
           lang: 'java'
 
@@ -459,9 +364,6 @@ jobs:
             bindings/${{ matrix.lang }}/**/gradle-wrapper.properties
 
       - name: Build Native library
-        env:
-          CC: clang-21
-          CXX: clang++-21
         run: |
           cmake --preset clang-ci
           cmake --build --preset clang-ci --target tachyon_java_resources
@@ -482,8 +384,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Native Core
-        uses: ./.github/actions/setup-native-core
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
           lang: 'java'
 
@@ -517,8 +419,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Native Core
-        uses: ./.github/actions/setup-native-core
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
           lang: 'node'
 
@@ -531,9 +433,6 @@ jobs:
 
       - name: Install dependencies & build native library
         working-directory: bindings/node
-        env:
-          CC: clang-21
-          CXX: clang++-21
         run: npm install && npm run build:native
 
       - name: Type check
@@ -568,8 +467,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Native Core
-        uses: ./.github/actions/setup-native-core
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
           lang: 'node'
 
@@ -611,8 +510,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Native Core
-        uses: ./.github/actions/setup-native-core
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
           lang: 'c#'
 
@@ -624,9 +523,6 @@ jobs:
             10.x
 
       - name: Build native library
-        env:
-          CC: clang-21
-          CXX: clang++-21
         run: |
           cmake --preset clang-ci
           cmake --build --preset clang-ci --parallel
@@ -652,8 +548,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Native Core
-        uses: ./.github/actions/setup-native-core
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
           lang: 'c#'
 
