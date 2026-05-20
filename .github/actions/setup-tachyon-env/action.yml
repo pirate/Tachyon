@@ -1,0 +1,99 @@
+name: Setup Tachyon Environment
+description: 'Bootstrapper: configures OS, toolchains, caches, and vendors the C++ core'
+inputs:
+  lang:
+    description: 'Target language for vendoring (cpp, python, rust, go, java, c#, node)'
+    required: true
+  compiler:
+    description: 'Compiler to use (clang or gcc)'
+    required: false
+    default: clang
+  llvm-version:
+    description: 'LLVM Version'
+    required: false
+    default: '21'
+  gcc-version:
+    description: 'GCC Version'
+    required: false
+    default: '16'
+  build-type:
+    description: 'Build type for cache keys (debug/release)'
+    required: false
+    default: 'release'
+  sanitizer:
+    description: 'Sanitizer profile to prevent cache trashing'
+    required: false
+    default: 'none'
+
+runs:
+  using: composite
+  steps:
+    - name: Install ccache (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ccache
+
+    - name: Install ccache (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install ccache
+
+    - name: Configure ccache
+      uses: actions/cache@v5
+      with:
+        key: ccache-${{ runner.os }}-${{ github.job }}-${{ inputs.compiler }}-${{ inputs.build-type }}-sanitizer_${{ inputs.sanitizer }}-${{ github.sha }}
+        path: |
+          ~/.cache/ccache
+          ~/Library/Caches/ccache
+        restore-keys: |
+          ccache-${{ runner.os }}-${{ github.job }}-${{ inputs.compiler }}-${{ inputs.build-type }}-sanitizer_${{ inputs.sanitizer }}-
+          ccache-${{ runner.os }}-${{ github.job }}-
+
+    - name: Setup Kitware APT repository (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
+          gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+        echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | \
+          sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
+
+    - name: Install CMake and Ninja (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends kitware-archive-keyring cmake ninja-build
+
+    - name: Install GCC (Linux)
+      if: runner.os == 'Linux' && inputs.compiler == 'gcc'
+      shell: bash
+      run: |
+        sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+        sudo apt-get update -qq
+        sudo apt install gcc-${{ inputs.gcc-version }} g++-${{ inputs.gcc-version }}
+
+    - name: Install LLVM (Linux)
+      if: runner.os == 'Linux' && inputs.compiler == 'clang'
+      shell: bash
+      run: bash ci/install_llvm.sh ${{ inputs.llvm-version }}
+
+    - name: Vendor C++ core
+      if: inputs.lang != 'cpp' && inputs.lang != 'python'
+      shell: bash
+      run: bash ci/vendor.sh ${{ inputs.lang }}
+
+    - name: Export environments
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" = "Linux" ]; then
+          if [ "${{ inputs.compiler }}" = "gcc" ]; then
+            echo "CC=ccache gcc-${{ inputs.gcc-version }}" >> $GITHUB_ENV
+            echo "CXX=ccache g++-${{ inputs.gcc-version }}" >> $GITHUB_ENV
+          elif [ "${{ inputs.compiler }}" = "clang" ]; then
+            echo "CC=ccache clang-${{ inputs.llvm-version }}" >> $GITHUB_ENV
+            echo "CXX=ccache clang++-${{ inputs.llvm-version }}" >> $GITHUB_ENV
+          fi
+        else
+          echo "CC=ccache clang" >> $GITHUB_ENV
+          echo "CXX=ccache clang++" >> $GITHUB_ENV
+        fi
