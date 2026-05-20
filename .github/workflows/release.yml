@@ -75,6 +75,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -90,9 +91,13 @@ jobs:
       - name: Vendor C++ core
         run: bash ci/vendor.sh rust
 
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
       - name: Publish tachyon-sys
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
           CXX: g++-16
           CC: gcc-16
         working-directory: bindings/rust
@@ -103,7 +108,7 @@ jobs:
 
       - name: Publish tachyon-ipc
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
           CXX: g++-16
           CC: gcc-16
         working-directory: bindings/rust
