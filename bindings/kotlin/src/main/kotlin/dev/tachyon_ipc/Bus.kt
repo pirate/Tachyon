@@ -121,6 +121,8 @@ public class Bus private constructor(private val inner: TachyonBus) : AutoClosea
      */
     public fun stats(): BusStats = inner.stats()
 
+    internal val bus: TachyonBus get() = inner
+
     override fun close() {
         inner.close()
     }
