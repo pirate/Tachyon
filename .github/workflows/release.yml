@@ -34,15 +34,15 @@ jobs:
     environment:
       name: pypi
       url: https://pypi.org/p/tachyon-ipc
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install Compiler
-        uses: ./.github/actions/gcc-installer
+      - name: Setup environment
+        uses: ./.github/actions/setup-tachyon-env
         with:
-          version: '16'
+          lang: 'python'
+          compiler: 'clang'
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -51,16 +51,12 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends python3-dev
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-dev
           sudo mkdir -p /usr/local/include/dlpack
           sudo curl -fsSL -o /usr/local/include/dlpack/dlpack.h \
             https://raw.githubusercontent.com/dmlc/dlpack/main/include/dlpack/dlpack.h
 
       - name: Build sdist
-        env:
-          CXX: g++-16
-          CC: gcc-16
         working-directory: bindings/python
         run: |
           pip install build
@@ -91,16 +87,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'rust'
+          compiler: 'clang'
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Compiler
-        uses: ./.github/actions/gcc-installer
-        with:
-          version: '16'
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh rust
 
       - name: Authenticate with crates.io
         id: auth
@@ -109,8 +103,6 @@ jobs:
       - name: Publish tachyon-sys
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-          CXX: g++-16
-          CC: gcc-16
         working-directory: bindings/rust
         run: cargo publish -p tachyon-sys --allow-dirty
 
@@ -120,8 +112,6 @@ jobs:
       - name: Publish tachyon-ipc
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-          CXX: g++-16
-          CC: gcc-16
         working-directory: bindings/rust
         run: cargo publish -p tachyon-ipc --allow-dirty
 
@@ -132,7 +122,6 @@ jobs:
     if: needs.check_release_type.outputs.is_stable == 'true'
     permissions:
       contents: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -199,23 +188,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'java'
+          compiler: 'clang'
 
       - name: Install aarch64 cross toolchain
         if: matrix.arch == 'aarch64'
         run: sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libstdc++-14-dev-arm64-cross
 
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh java
-
       - name: Build Linux FFM (${{ matrix.arch }})
-        env:
-          CC: clang-21
-          CXX: clang++-21
         run: |
           cmake --preset ${{ matrix.preset }} -DTACHYON_ENABLE_BENCH=OFF
           cmake --build --preset ${{ matrix.preset }} --target tachyon_java_resources
@@ -250,8 +233,10 @@ jobs:
           java-version: '21'
           cache: 'gradle'
 
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh java
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'java'
 
       - name: Build Native library
         run: |
@@ -266,11 +251,15 @@ jobs:
           path: bindings/java/src/main/resources/native
           if-no-files-found: 'error'
 
-  java_publish:
-    name: Publish Fat JAR to Maven Central
+  jvm_publish:
+    name: Publish Fat JAR to Maven Central (${{ matrix.lang }})
     runs-on: ubuntu-24.04
     needs: [ check_release_type, java_native_linux, java_native_macos ]
     if: needs.check_release_type.outputs.is_stable == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [ java, kotlin ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -290,7 +279,7 @@ jobs:
           merge-multiple: true
 
       - name: Publish to Central Portal
-        working-directory: bindings/java
+        working-directory: bindings/${{ matrix.lang }}
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.CENTRAL_TOKEN }}
@@ -299,57 +288,14 @@ jobs:
         run: ./gradlew publishAndReleaseToMavenCentral --no-daemon --no-build-cache --rerun-tasks
 
       - name: Assemble Fat JAR for GitHub Release
-        working-directory: bindings/java
+        working-directory: bindings/${{ matrix.lang }}
         run: ./gradlew jar --no-daemon
 
       - name: Upload Fat JAR artifact
         uses: actions/upload-artifact@v7
         with:
-          name: 'java-fat-jar'
-          path: bindings/java/build/libs/tachyon-java-*.jar
-          if-no-files-found: 'error'
-
-  kotlin_publish:
-    name: Publish Fat JAR to Maven Central
-    runs-on: ubuntu-24.04
-    needs: [ check_release_type, java_native_linux, java_native_macos ]
-    if: needs.check_release_type.outputs.is_stable == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
-
-      - name: Download Native Assets
-        uses: actions/download-artifact@v8
-        with:
-          pattern: native-*
-          path: bindings/java/src/main/resources/native
-          merge-multiple: true
-
-      - name: Publish to Central Portal
-        working-directory: bindings/kotlin
-        env:
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.CENTRAL_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.CENTRAL_TOKEN }}
-          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_PRIVATE_KEY }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSPHRASE }}
-        run: ./gradlew publishAndReleaseToMavenCentral --no-daemon --no-build-cache --rerun-tasks
-
-      - name: Assemble Fat JAR for GitHub Release
-        working-directory: bindings/kotlin
-        run: ./gradlew jar --no-daemon
-
-      - name: Upload Fat JAR artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: 'kotlin-fat-jar'
-          path: bindings/kotlin/build/libs/tachyon-kotlin-*.jar
+          name: '${{ matrix.lang }}-fat-jar'
+          path: bindings/${{ matrix.lang }}/build/libs/tachyon-${{ matrix.lang }}-*.jar
           if-no-files-found: 'error'
 
   nodejs_prebuilt:
@@ -372,30 +318,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install LLVM 21 (Linux)
-        if: matrix.platform == 'linux'
-        run: bash ci/install_llvm.sh 21
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'node'
+          compiler: 'clang'
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 20
 
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh node
-
       - name: Install dependencies
         working-directory: bindings/node
-        env:
-          CC: ${{ matrix.platform == 'linux' && 'clang-21' || 'clang' }}
-          CXX: ${{ matrix.platform == 'linux' && 'clang++-21' || 'clang++' }}
         run: npm install
 
       - name: Build Prebuilt
         working-directory: bindings/node
-        env:
-          CC: ${{ matrix.platform == 'linux' && 'clang-21' || 'clang' }}
-          CXX: ${{ matrix.platform == 'linux' && 'clang++-21' || 'clang++' }}
         run: |
           npx cmake-js compile --arch ${{ matrix.arch }}
           TARGET_DIR="prebuilds/${{ matrix.platform }}-${{ matrix.arch }}"
@@ -445,8 +384,11 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh node
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'node'
+          compiler: 'clang'
 
       - name: Download all prebuilts
         uses: actions/download-artifact@v8
@@ -457,9 +399,6 @@ jobs:
 
       - name: Build TypeScript
         working-directory: bindings/node
-        env:
-          CC: 'clang'
-          CXX: 'clang++'
         run: npm install --ignore-scripts && npm run build:ts
 
       - name: Publish to NPM
@@ -482,24 +421,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'c#'
+          compiler: 'clang'
 
       - name: Install aarch64 cross toolchain
-        if: matrix.arch == 'aarch64'
+        if: matrix.arch == 'arm64'
         run: sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libstdc++-14-dev-arm64-cross
-
-      - name: Install LLVM 21
-        run: bash ci/install_llvm.sh 21
-
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh c#
 
       - name: Build libtachyon (x86-64)
         if: matrix.arch == 'amd64'
-        env:
-          CC: clang-21
-          CXX: clang++-21
         run: |
           cmake --preset clang-release -DTACHYON_ENABLE_BENCH=OFF
           cmake --build --preset clang-release --target tachyon --parallel
@@ -509,9 +442,6 @@ jobs:
 
       - name: Build libtachyon (aarch64)
         if: matrix.arch == 'arm64'
-        env:
-          CC: clang-21
-          CXX: clang++-21
         run: |
           cmake --preset clang-aarch64-release -DTACHYON_ENABLE_BENCH=OFF
           cmake --build --preset clang-aarch64-release --target tachyon --parallel
@@ -542,21 +472,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Vendor C++ core
-        run: bash ci/vendor.sh c#
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'c#'
 
       - name: Build libtachyon.dylib
         run: |
           cmake --preset macos-release -DTACHYON_ENABLE_BENCH=OFF
           cmake --build --preset macos-release --parallel
-          mkdir -p dist
-          cp build/macos-release/core/libtachyon.dylib dist/libtachyon.dylib
+          mkdir -p bindings/csharp/src/TachyonIpc/runtimes/${{ matrix.rid }}/native
+          cp build/macos-release/core/libtachyon.dylib \
+            bindings/csharp/src/TachyonIpc/runtimes/${{ matrix.rid }}/native/libtachyon.dylib
 
       - name: Upload native artifact
         uses: actions/upload-artifact@v7
         with:
           name: csharp-native-${{ matrix.rid }}
-          path: dist/libtachyon.dylib
+          path: bindings/csharp/src/TachyonIpc/runtimes/${{ matrix.rid }}/native/libtachyon.dylib
           if-no-files-found: error
 
   csharp_publish:
@@ -634,11 +567,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Kitware
-        uses: ./.github/actions/kitware-apt
-
-      - name: Install LLVM
-        run: bash ci/install_llvm.sh 21
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'cpp'
 
       - name: Configure and Build
         run: |
@@ -656,17 +588,8 @@ jobs:
 
   github_release:
     name: Create GitHub Release
-    needs: [ python_sdist, rust_publish, go_publish, java_publish, kotlin_publish, nodejs_publish, csharp_publish, tachyon_top ]
-    if: |
-      always() &&
-      needs.python_sdist.result == 'success' &&
-      (needs.rust_publish.result == 'success' || needs.rust_publish.result == 'skipped') &&
-      (needs.go_publish.result == 'success'   || needs.go_publish.result == 'skipped')  &&
-      (needs.java_publish.result == 'success' || needs.java_publish.result == 'skipped') &&
-      (needs.kotlin_publish.result == 'success' || needs.kotlin_publish.result == 'skipped') &&
-      (needs.nodejs_publish.result == 'success' || needs.nodejs_publish.result == 'skipped') &&
-      (needs.csharp_publish.result == 'success' || needs.csharp_publish.result == 'skipped') &&
-      needs.tachyon_top.result == 'success'
+    needs: [ python_sdist, rust_publish, go_publish, jvm_publish, nodejs_publish, csharp_publish, tachyon_top ]
+    if: always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     permissions:
       attestations: write
@@ -685,18 +608,12 @@ jobs:
           path: dist/
 
       - name: Download Java Fat JAR
-        if: needs.java_publish.result == 'success'
+        if: needs.jvm_publish.result == 'success'
         uses: actions/download-artifact@v8
         with:
-          name: java-fat-jar
           path: dist/
-
-      - name: Download Kotlin Fat JAR
-        if: needs.kotlin_publish.result == 'success'
-        uses: actions/download-artifact@v8
-        with:
-          name: kotlin-fat-jar
-          path: dist/
+          pattern: '*-fat-jar'
+          merge-multiple: 'true'
 
       - name: Download Node Tarballs
         uses: actions/download-artifact@v8
