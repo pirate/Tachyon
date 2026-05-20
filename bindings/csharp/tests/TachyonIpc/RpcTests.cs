@@ -42,7 +42,7 @@ public sealed unsafe class RpcBusTests
         using (callee!)
         {
             Assert.Equal(TachyonState.Ready, caller.State);
-            Assert.Equal(TachyonState.Ready, callee.State);
+            Assert.Equal(TachyonState.Ready, callee!.State);
         }
     }
 
@@ -228,7 +228,7 @@ public sealed unsafe class RpcBusTests
         Assert.Equal(new byte[] { 0x01 }, resp.Data.ToArray());
 
         t.Join(2000);
-        callee.Dispose();
+        callee!.Dispose();
     }
 
     [Fact]
