@@ -245,9 +245,17 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test
-        run: cargo test
+      - name: Format Check
         working-directory: bindings/rust
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        working-directory: bindings/rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        working-directory: bindings/rust
+        run: cargo test
 
   rust_macos:
     name: Rust bindings (${{ matrix.runner }})
@@ -268,9 +276,17 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test
-        run: cargo test
+      - name: Format Check
         working-directory: bindings/rust
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        working-directory: bindings/rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        working-directory: bindings/rust
+        run: cargo test
 
   go:
     name: Go bindings (Linux)
