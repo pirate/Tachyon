@@ -6,6 +6,13 @@ on:
       - development
   schedule:
     - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: 'Fuzzing time in seconds'
+        required: true
+        type: number
+        default: 600
 
 permissions:
   contents: read
@@ -34,6 +41,6 @@ jobs:
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: '600'
+          fuzz-seconds: ${{ inputs.fuzz_seconds || '600' }}
           mode: 'batch'
           sanitizer: ${{ matrix.sanitizer }}
