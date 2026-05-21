@@ -135,6 +135,7 @@ public:
 	}
 
 private:
+	friend class TachyonStarBusNode;
 	tachyon_bus_t								   *bus_{nullptr};
 	std::vector<tachyon_msg_view_t>					batch_views_;
 	std::vector<Napi::Reference<Napi::ArrayBuffer>> batch_arraybuffers_;
@@ -509,7 +510,7 @@ private:
 		if (!assert_open(env))
 			return env.Undefined();
 
-		tachyon_bus_stats_t stats;
+		tachyon_bus_stats_t	  stats;
 		const tachyon_error_t err = tachyon_bus_stats(bus_, &stats);
 		if (err != TACHYON_SUCCESS) {
 			set_tachyon_error(env, err);
@@ -817,9 +818,328 @@ private:
 
 Napi::FunctionReference TachyonRpcBusNode::ctor_;
 
+class TachyonStarBusNode : public Napi::ObjectWrap<TachyonStarBusNode> {
+public:
+	static Napi::FunctionReference ctor_;
+
+	static Napi::Object Init(Napi::Env env, Napi::Object exports) {
+		Napi::Function func = DefineClass(
+			env,
+			"TachyonStarBusNode",
+			{
+				StaticMethod<&TachyonStarBusNode::Create>("create"),
+				InstanceMethod<&TachyonStarBusNode::Close>("close"),
+				InstanceMethod<&TachyonStarBusNode::Poll>("poll"),
+				InstanceMethod<&TachyonStarBusNode::Commit>("commit"),
+				InstanceMethod<&TachyonStarBusNode::AcquireTx>("acquireTx"),
+				InstanceMethod<&TachyonStarBusNode::CommitTx>("commitTx"),
+				InstanceMethod<&TachyonStarBusNode::RollbackTx>("rollbackTx"),
+				InstanceMethod<&TachyonStarBusNode::Flush>("flush"),
+				InstanceMethod<&TachyonStarBusNode::GetState>("getState"),
+				InstanceMethod<&TachyonStarBusNode::NSpokes>("nSpokes"),
+			}
+		);
+		ctor_ = Napi::Persistent(func);
+		exports.Set("TachyonStarBusNode", func);
+		return exports;
+	}
+
+	explicit TachyonStarBusNode(const Napi::CallbackInfo &info) : Napi::ObjectWrap<TachyonStarBusNode>(info) {}
+
+	~TachyonStarBusNode() override {
+		destroy();
+	}
+
+private:
+	tachyon_star_t								   *star_{nullptr};
+	std::vector<tachyon_msg_view_t>					poll_views_;
+	std::vector<size_t>								poll_spoke_indices_;
+	std::vector<Napi::Reference<Napi::ArrayBuffer>> poll_arraybuffers_;
+
+	void destroy() noexcept {
+		if (star_ != nullptr) {
+			tachyon_star_destroy(star_);
+			star_ = nullptr;
+		}
+	}
+
+	bool assert_open(Napi::Env env) const noexcept {
+		if (star_ != nullptr)
+			return true;
+		Napi::Error::New(env, "TachyonStarBus is closed or not initialized.").ThrowAsJavaScriptException();
+		return false;
+	}
+
+	static Napi::Value Create(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+
+		if (info.Length() < 1 || !info[0].IsArray()) {
+			Napi::TypeError::New(env, "create(buses: TachyonBusNode[], nodeIds?: number[] | null)")
+				.ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		const Napi::Array js_buses = info[0].As<Napi::Array>();
+		const uint32_t	  n		   = js_buses.Length();
+
+		if (n == 0) {
+			Napi::Error::New(env, "buses must not be empty.").ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		std::vector<tachyon_bus_t *> bus_handles;
+		bus_handles.reserve(n);
+
+		for (uint32_t i = 0; i < n; ++i) {
+			Napi::Value item = js_buses.Get(i);
+			if (!item.IsObject()) {
+				Napi::TypeError::New(env, "buses[i] is not a TachyonBusNode instance.").ThrowAsJavaScriptException();
+				return env.Undefined();
+			}
+
+			TachyonBusNode *bus_node = nullptr;
+			try {
+				bus_node = Napi::ObjectWrap<TachyonBusNode>::Unwrap(item.As<Napi::Object>());
+			} catch (...) {
+				bus_node = nullptr;
+			}
+
+			if (bus_node == nullptr || bus_node->bus_ == nullptr) {
+				Napi::TypeError::New(env, "buses[i] is not a valid or open TachyonBusNode.")
+					.ThrowAsJavaScriptException();
+				return env.Undefined();
+			}
+			bus_handles.push_back(bus_node->bus_);
+		}
+
+		std::vector<int> node_ids_buf;
+		const int		*node_ids_ptr = nullptr;
+
+		if (info.Length() >= 2 && info[1].IsArray()) {
+			const Napi::Array js_ids = info[1].As<Napi::Array>();
+			if (js_ids.Length() != n) {
+				Napi::Error::New(env, "nodeIds length must equal buses.length.").ThrowAsJavaScriptException();
+				return env.Undefined();
+			}
+
+			node_ids_buf.reserve(n);
+			for (uint32_t i = 0; i < n; ++i) {
+				Napi::Value v = js_ids.Get(i);
+				if (!v.IsNumber()) {
+					Napi::TypeError::New(env, "nodeIds[i] must be a number.").ThrowAsJavaScriptException();
+					return env.Undefined();
+				}
+				node_ids_buf.push_back(v.As<Napi::Number>().Int32Value());
+			}
+
+			node_ids_ptr = node_ids_buf.data();
+		}
+
+		tachyon_star_t		 *star = nullptr;
+		const tachyon_error_t err  = tachyon_star_create(bus_handles.data(), n, node_ids_ptr, &star);
+		if (err != TACHYON_SUCCESS) {
+			set_tachyon_error(env, err);
+			return env.Undefined();
+		}
+
+		Napi::Object		obj	 = ctor_.New({});
+		TachyonStarBusNode *node = Unwrap(obj);
+		node->star_				 = star;
+		return obj;
+	}
+
+	Napi::Value Close(const Napi::CallbackInfo &info) {
+		destroy();
+		return info.Env().Undefined();
+	}
+
+	Napi::Value Poll(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+		if (!assert_open(env)) {
+			return env.Undefined();
+		}
+
+		if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsNumber()) {
+			Napi::TypeError::New(env, "poll(maxTotal: number, budgetUs: number)").ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		const size_t   max_total = static_cast<size_t>(info[0].As<Napi::Number>().Int64Value());
+		const uint64_t budget_us = static_cast<uint64_t>(info[1].As<Napi::Number>().Int64Value());
+
+		if (max_total == 0) {
+			Napi::Error::New(env, "maxTotal must be > 0.").ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		poll_views_.resize(max_total);
+		poll_spoke_indices_.resize(max_total);
+
+		const size_t count =
+			tachyon_star_poll(star_, poll_views_.data(), max_total, budget_us, poll_spoke_indices_.data());
+
+		poll_views_.resize(count);
+		poll_spoke_indices_.resize(count);
+		poll_arraybuffers_.clear();
+		poll_arraybuffers_.reserve(count);
+
+		Napi::Array result = Napi::Array::New(env, count);
+
+		for (size_t i = 0; i < count; ++i) {
+			const tachyon_msg_view_t &v	  = poll_views_[i];
+			Napi::Buffer<uint8_t>	  buf = Napi::Buffer<uint8_t>::New(
+				env, const_cast<uint8_t *>(static_cast<const uint8_t *>(v.ptr)), v.actual_size, noop_finalizer
+			);
+
+			poll_arraybuffers_.push_back(Napi::Reference<Napi::ArrayBuffer>::New(buf.ArrayBuffer(), 1));
+
+			Napi::Object msg = Napi::Object::New(env);
+			msg.Set("data", buf);
+			msg.Set("typeId", Napi::Number::New(env, v.type_id));
+			msg.Set("actualSize", Napi::Number::New(env, static_cast<double>(v.actual_size)));
+			msg.Set("spokeIdx", Napi::Number::New(env, static_cast<double>(poll_spoke_indices_[i])));
+
+			result.Set(static_cast<uint32_t>(i), msg);
+		}
+
+		return result;
+	}
+
+	Napi::Value Commit(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+		if (!assert_open(env)) {
+			return env.Undefined();
+		}
+
+		if (poll_views_.empty()) {
+			return env.Undefined();
+		}
+
+		const tachyon_error_t err = tachyon_star_commit(star_);
+		poll_views_.clear();
+		poll_spoke_indices_.clear();
+		for (auto &ref : poll_arraybuffers_) {
+			ref.Value().Detach();
+			ref.Reset();
+		}
+
+		poll_arraybuffers_.clear();
+		if (err != TACHYON_SUCCESS) {
+			set_tachyon_error(env, err);
+			return env.Undefined();
+		}
+
+		return env.Undefined();
+	}
+
+	Napi::Value AcquireTx(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+		if (!assert_open(env)) {
+			return env.Undefined();
+		}
+
+		if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsNumber()) {
+			Napi::TypeError::New(env, "acquireTx(spokeIdx: number, maxSize: number)").ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		const size_t spoke_idx = static_cast<size_t>(info[0].As<Napi::Number>().Int64Value());
+		const size_t max_size  = static_cast<size_t>(info[1].As<Napi::Number>().Int64Value());
+
+		void *ptr = tachyon_star_acquire_tx(star_, spoke_idx, max_size);
+		if (ptr == nullptr) {
+			return env.Null();
+		}
+
+		return Napi::Buffer<uint8_t>::New(env, static_cast<uint8_t *>(ptr), max_size, noop_finalizer);
+	}
+
+	Napi::Value CommitTx(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+		if (!assert_open(env)) {
+			return env.Undefined();
+		}
+
+		if (info.Length() < 3 || !info[0].IsNumber() || !info[1].IsNumber() || !info[2].IsNumber()) {
+			Napi::TypeError::New(env, "commitTx(spokeIdx: number, actualSize: number, typeId: number)")
+				.ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		const size_t   spoke_idx   = static_cast<size_t>(info[0].As<Napi::Number>().Int64Value());
+		const size_t   actual_size = static_cast<size_t>(info[1].As<Napi::Number>().Int64Value());
+		const uint32_t type_id	   = info[2].As<Napi::Number>().Uint32Value();
+
+		const tachyon_error_t err = tachyon_star_commit_tx(star_, spoke_idx, actual_size, type_id);
+		if (err != TACHYON_SUCCESS) {
+			set_tachyon_error(env, err);
+		}
+		return env.Undefined();
+	}
+
+	Napi::Value RollbackTx(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+		if (!assert_open(env)) {
+			return env.Undefined();
+		}
+
+		if (info.Length() < 1 || !info[0].IsNumber()) {
+			Napi::TypeError::New(env, "rollbackTx(spokeIdx: number)").ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		const size_t spoke_idx = static_cast<size_t>(info[0].As<Napi::Number>().Int64Value());
+		tachyon_star_rollback_tx(star_, spoke_idx);
+		return env.Undefined();
+	}
+
+	Napi::Value Flush(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+		if (!assert_open(env)) {
+			return env.Undefined();
+		}
+
+		if (info.Length() < 1 || !info[0].IsNumber()) {
+			Napi::TypeError::New(env, "flush(spokeIdx: number)").ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		const size_t spoke_idx = static_cast<size_t>(info[0].As<Napi::Number>().Int64Value());
+		tachyon_star_flush(star_, spoke_idx);
+		return env.Undefined();
+	}
+
+	Napi::Value GetState(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+		if (!assert_open(env)) {
+			return env.Undefined();
+		}
+
+		if (info.Length() < 1 || !info[0].IsNumber()) {
+			Napi::TypeError::New(env, "getState(spokeIdx: number)").ThrowAsJavaScriptException();
+			return env.Undefined();
+		}
+
+		const size_t spoke_idx = static_cast<size_t>(info[0].As<Napi::Number>().Int64Value());
+		return Napi::Number::New(env, static_cast<int>(tachyon_star_get_state(star_, spoke_idx)));
+	}
+
+	Napi::Value NSpokes(const Napi::CallbackInfo &info) {
+		Napi::Env env = info.Env();
+		if (!assert_open(env)) {
+			return env.Undefined();
+		}
+
+		return Napi::Number::New(env, static_cast<double>(tachyon_star_n_spokes(star_)));
+	}
+};
+
+Napi::FunctionReference TachyonStarBusNode::ctor_;
+
 Napi::Object InitModule(const Napi::Env env, const Napi::Object exports) {
 	TachyonBusNode::Init(env, exports);
 	TachyonRpcBusNode::Init(env, exports);
+	TachyonStarBusNode::Init(env, exports);
 	return exports;
 }
 
