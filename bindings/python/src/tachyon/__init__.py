@@ -7,13 +7,15 @@ from ._tachyon import (
 	RxBatchGuard,
 	RxMsgView,
 	TachyonRpcBus,
+	TachyonStarBus,
 	RpcTxGuard,
 	RpcRxGuard,
 )
 from .bus import Bus, BusStats
+from .message import Message
 from .rpc import RpcBus
 from .rpc_decorator import RpcDispatcher, RpcEndpoint, tachyon_rpc, MSG_TYPE_ERROR, _decode_error
-from .message import Message
+from .star import StarBus, StarMsgView
 from .type_id import make_type_id, msg_type, route_id
 
 __all__ = [
@@ -32,6 +34,9 @@ __all__ = [
 	"RpcBus",
 	"RpcDispatcher",
 	"RpcEndpoint",
+	"TachyonStarBus",
+	"StarBus",
+	"StarMsgView",
 	"tachyon_rpc",
 	"MSG_TYPE_ERROR",
 	"Message",

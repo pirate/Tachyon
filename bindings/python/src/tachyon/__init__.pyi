@@ -1,5 +1,5 @@
 import types
-from typing import Callable, Iterator, Generator, Optional, Type, Any, NamedTuple
+from typing import Any, Callable, Generator, Iterator, List, NamedTuple, Optional, Sequence, Type
 from . import _tachyon
 
 __all__ = [
@@ -18,6 +18,9 @@ __all__ = [
 	"RpcBus",
 	"RpcDispatcher",
 	"RpcEndpoint",
+	"TachyonStarBus",
+	"StarBus",
+	"StarMsgView",
 	"tachyon_rpc",
 	"MSG_TYPE_ERROR",
 	"Message",
@@ -68,6 +71,7 @@ RxMsgView = _tachyon.RxMsgView
 TachyonRpcBus = _tachyon.TachyonRpcBus
 RpcTxGuard = _tachyon.RpcTxGuard
 RpcRxGuard = _tachyon.RpcRxGuard
+TachyonStarBus = _tachyon.TachyonStarBus
 
 
 class Message:
@@ -300,3 +304,118 @@ class RpcDispatcher:
 	def serve_once(self, bus: RpcBus, spin_threshold: int = 10000) -> None: ...
 
 	def serve_forever(self, bus: RpcBus, spin_threshold: int = 10000) -> None: ...
+
+
+class StarMsgView(NamedTuple):
+	"""Immutable view of one message received from a specific spoke."""
+	data: bytes
+	type_id: int
+	actual_size: int
+	spoke_idx: int
+
+
+class StarBus:
+	"""
+	Aggregates N independent SPSC arenas into a single round-robin polling loop bounded by a TSC-calibrated time budget.
+	One consumer per StarBus; one producer per spoke.
+	"""
+
+	def __init__(self) -> None:
+		"""Private. Use :meth:`create`."""
+		...
+
+	@classmethod
+	def create(
+			cls,
+			buses: Sequence["Bus"],
+			node_ids: Optional[Sequence[int]] = None,
+	) -> "StarBus":
+		"""
+		Creates a StarBus from *buses* (connector-side).
+
+		:param buses:    Non-empty sequence of :class:`Bus` instances.
+		:param node_ids: Optional NUMA node IDs, same length as *buses*.
+						 Negative values skip binding. ``None`` disables NUMA.
+		:raises ValueError:  *buses* empty or *node_ids* length mismatches.
+		:raises TypeError:   An element of *buses* is not a :class:`Bus`.
+		:raises OSError:     Native SHM or TSC calibration failure.
+		"""
+		...
+
+	def __enter__(self) -> "StarBus": ...
+
+	def __exit__(
+			self,
+			exc_type: Optional[Type[BaseException]],
+			exc_val: Optional[BaseException],
+			exc_tb: Optional[types.TracebackType],
+	) -> None: ...
+
+	@property
+	def n_spokes(self) -> int:
+		"""Number of spokes."""
+		...
+
+	def get_state(self, spoke_idx: int) -> int:
+		"""
+		Raw ``tachyon_state_t`` integer for *spoke_idx*.
+		Returns ``TACHYON_STATE_UNKNOWN`` (5) if *spoke_idx* is out of range.
+		"""
+		...
+
+	def poll(self, max_total: int, budget_us: int) -> List[StarMsgView]:
+		"""
+		Drains up to *max_total* messages across all spokes within *budget_us*
+		microseconds. Returns an empty list when the budget expires.
+
+		Payload bytes are heap-copied; ownership passes to the caller.
+		Must call :meth:`commit` to release ring-buffer slots.
+
+		:param max_total: Upper bound on messages. Must be > 0.
+		:param budget_us: TSC-bounded polling budget in microseconds.
+		"""
+		...
+
+	def commit(self) -> None:
+		"""
+		Advances consumer tails for all polled spokes, releasing ring-buffer slots.
+		Safe to call when the last poll returned an empty list.
+
+		:raises OSError: Native fatal-error state.
+		"""
+		...
+
+	def send_zero_copy(
+			self, spoke_idx: int, size: int, type_id: int = 0
+	) -> Generator[memoryview, None, None]:
+		"""
+		Zero-copy TX context manager on *spoke_idx*. Yields a writable
+		:class:`memoryview` into SHM. Commits and flushes on normal exit;
+		rolls back on exception.
+
+		:raises RuntimeError: Ring full or *spoke_idx* out of range.
+		"""
+		...
+
+	def acquire_tx(self, spoke_idx: int, size: int) -> Optional[memoryview]:
+		"""
+		Non-blocking TX slot. Returns a writable memoryview or ``None`` if
+		the ring is full / *spoke_idx* is out of range.
+		"""
+		...
+
+	def commit_tx(self, spoke_idx: int, actual_size: int, type_id: int = 0) -> None:
+		"""Publishes *actual_size* bytes and flushes. No separate flush needed."""
+		...
+
+	def rollback_tx(self, spoke_idx: int) -> None:
+		"""Aborts the pending TX slot. No-op if no slot is held."""
+		...
+
+	def flush(self, spoke_idx: int) -> None:
+		"""Futex wake on *spoke_idx* without committing a TX slot."""
+		...
+
+	def close(self) -> None:
+		"""Explicit teardown. Idempotent."""
+		...
