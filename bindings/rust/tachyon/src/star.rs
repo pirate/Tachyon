@@ -33,10 +33,10 @@ impl StarBus {
     /// Internally calls `tachyon_bus_ref` on every bus before returning,
     /// so the caller's `Bus` handles may be dropped independently.
     pub fn create(buses: &[&Bus], node_ids: Option<&[i32]>) -> Result<Self, TachyonError> {
-        if let Some(ids) = node_ids {
-            if ids.len() != buses.len() {
-                return Err(TachyonError::InvalidSize);
-            }
+        if let Some(ids) = node_ids
+            && ids.len() != buses.len()
+        {
+            return Err(TachyonError::InvalidSize);
         }
 
         let mut raw: Vec<*mut tachyon_sys::tachyon_bus_t> =

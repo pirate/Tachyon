@@ -3,7 +3,7 @@ use std::ffi::CString;
 use std::ptr::NonNull;
 use tachyon_sys::*;
 
-const STATE_FATAL_ERROR: u32 = tachyon_state_t_TACHYON_STATE_FATAL_ERROR as u32;
+const STATE_FATAL_ERROR: u32 = tachyon_state_t_TACHYON_STATE_FATAL_ERROR;
 
 /// Read-only snapshot of bus state.
 ///
@@ -42,8 +42,7 @@ impl Bus {
 
         loop {
             let err = unsafe { tachyon_bus_listen(path.as_ptr(), capacity, &mut raw) };
-
-            if err == tachyon_error_t_TACHYON_ERR_INTERRUPTED as u32 {
+            if err == tachyon_error_t_TACHYON_ERR_INTERRUPTED {
                 // Signal handling is the caller's responsibility.
                 // Simply retry on EINTR from poll().
                 continue;
@@ -118,7 +117,7 @@ impl Bus {
             ring_capacity: raw.ring_capacity,
             ring_occupancy: raw.ring_occupancy,
             consumer_state: raw.consumer_state,
-            state: raw.state as u32,
+            state: raw.state,
         }
     }
 
