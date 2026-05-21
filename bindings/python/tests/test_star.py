@@ -1,3 +1,4 @@
+import binascii
 import os
 import struct
 import threading
@@ -12,8 +13,8 @@ BUDGET_US = 5_000
 
 
 def _sock(tmp_path, name: str) -> str:
-	return str(tmp_path / name)
-
+	unique_suffix = binascii.hexlify(os.urandom(4)).decode()
+	return f"/tmp/tachyon_{unique_suffix}_{name}"
 
 def _start_sender(socket_path: str, payload: bytes, type_id: int = 0) -> threading.Thread:
 	def _run():
