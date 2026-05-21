@@ -1694,6 +1694,354 @@ static PyMethodDef TachyonRpcBusMethods[9] = {
 
 static PyTypeObject TachyonRpcBusType = {PyVarObject_HEAD_INIT(nullptr, 0)};
 
+typedef struct {
+	PyObject_HEAD tachyon_star_t *star;
+} TachyonStarBus;
+
+static PyTypeObject TachyonStarBusType = {PyVarObject_HEAD_INIT(nullptr, 0)};
+
+static PyObject *TachyonStarBus_new(PyTypeObject *type, PyObject *Py_UNUSED(args), PyObject *Py_UNUSED(kwds)) {
+	TachyonStarBus *self = reinterpret_cast<TachyonStarBus *>(type->tp_alloc(type, 0));
+	if (self != nullptr) {
+		self->star = nullptr;
+	}
+
+	return reinterpret_cast<PyObject *>(self);
+}
+
+static void TachyonStarBus_dealloc(TachyonStarBus *self) {
+	if (self->star != nullptr) {
+		tachyon_star_destroy(self->star);
+		self->star = nullptr;
+	}
+
+	Py_TYPE(self)->tp_free(reinterpret_cast<PyObject *>(self));
+}
+
+static PyObject *TachyonStarBus_create(TachyonStarBus *self, PyObject *args, PyObject *kwds) {
+	static char *kwlist[] = {const_cast<char *>("buses"), const_cast<char *>("node_ids"), nullptr};
+	PyObject	*buses_seq;
+	PyObject	*node_ids_obj = Py_None;
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O", kwlist, &buses_seq, &node_ids_obj)) {
+		return nullptr;
+	}
+
+	if (self->star != nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is already initialized.");
+		return nullptr;
+	}
+
+	PyObject *fast_buses = PySequence_Fast(buses_seq, "buses must be a sequence");
+	if (!fast_buses) {
+		return nullptr;
+	}
+
+	const Py_ssize_t n = PySequence_Fast_GET_SIZE(fast_buses);
+	if (n == 0) {
+		Py_DECREF(fast_buses);
+		PyErr_SetString(PyExc_ValueError, "buses must not be empty.");
+		return nullptr;
+	}
+
+	auto *bus_handles = new (std::nothrow) tachyon_bus_t *[n];
+	if (!bus_handles) {
+		Py_DECREF(fast_buses);
+		return PyErr_NoMemory();
+	}
+
+	for (Py_ssize_t i = 0; i < n; ++i) {
+		PyObject *item = PySequence_Fast_GET_ITEM(fast_buses, i);
+		if (!PyObject_TypeCheck(item, &TachyonBusType)) {
+			delete[] bus_handles;
+			Py_DECREF(fast_buses);
+			PyErr_Format(PyExc_TypeError, "buses[%zd] is not a TachyonBus.", i);
+			return nullptr;
+		}
+
+		bus_handles[i] = reinterpret_cast<TachyonBus *>(item)->bus;
+		if (bus_handles[i] == nullptr) {
+			delete[] bus_handles;
+			Py_DECREF(fast_buses);
+			PyErr_Format(PyExc_RuntimeError, "buses[%zd] is not initialized.", i);
+			return nullptr;
+		}
+	}
+
+	Py_DECREF(fast_buses);
+
+	int *node_ids_ptr = nullptr;
+	if (node_ids_obj != Py_None) {
+		PyObject *fast_nodes = nullptr;
+		fast_nodes			 = PySequence_Fast(node_ids_obj, "node_ids must be a sequence or None");
+		if (!fast_nodes) {
+			delete[] bus_handles;
+			return nullptr;
+		}
+
+		if (PySequence_Fast_GET_SIZE(fast_nodes) != n) {
+			delete[] bus_handles;
+			Py_DECREF(fast_nodes);
+			PyErr_SetString(PyExc_ValueError, "node_ids length must equal buses length.");
+			return nullptr;
+		}
+
+		node_ids_ptr = new (std::nothrow) int[static_cast<size_t>(n)];
+		if (!node_ids_ptr) {
+			delete[] bus_handles;
+			Py_DECREF(fast_nodes);
+			return PyErr_NoMemory();
+		}
+
+		for (Py_ssize_t i = 0; i < n; ++i) {
+			const long val = PyLong_AsLong(PySequence_Fast_GET_ITEM(fast_nodes, i));
+			if (PyErr_Occurred()) {
+				delete[] node_ids_ptr;
+				delete[] bus_handles;
+				Py_DECREF(fast_nodes);
+				return nullptr;
+			}
+			node_ids_ptr[i] = static_cast<int>(val);
+		}
+		Py_DECREF(fast_nodes);
+	}
+
+	tachyon_error_t err;
+	Py_BEGIN_ALLOW_THREADS;
+	err = tachyon_star_create(bus_handles, static_cast<size_t>(n), node_ids_ptr, &self->star);
+	Py_END_ALLOW_THREADS;
+
+	delete[] bus_handles;
+	delete[] node_ids_ptr;
+
+	if (err != TACHYON_SUCCESS) {
+		return raise_tachyon_error(err);
+	}
+
+	Py_RETURN_NONE;
+}
+
+static PyObject *TachyonStarBus_poll(TachyonStarBus *self, PyObject *args, PyObject *kwds) {
+	static char		  *kwlist[] = {const_cast<char *>("max_total"), const_cast<char *>("budget_us"), nullptr};
+	Py_ssize_t		   max_total;
+	unsigned long long budget_us;
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "nK", kwlist, &max_total, &budget_us)) {
+		return nullptr;
+	}
+
+	if (self->star == nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is not initialized.");
+		return nullptr;
+	}
+
+	if (max_total <= 0) {
+		PyErr_SetString(PyExc_ValueError, "max_total must be > 0.");
+		return nullptr;
+	}
+
+	auto *views	  = new (std::nothrow) tachyon_msg_view_t[static_cast<size_t>(max_total)];
+	auto *indices = new (std::nothrow) size_t[static_cast<size_t>(max_total)];
+	if (!views || !indices) {
+		delete[] views;
+		delete[] indices;
+		return PyErr_NoMemory();
+	}
+
+	size_t count = 0;
+	Py_BEGIN_ALLOW_THREADS;
+	count = tachyon_star_poll(self->star, views, static_cast<size_t>(max_total), budget_us, indices);
+	Py_END_ALLOW_THREADS;
+
+	PyObject *result = PyList_New(static_cast<Py_ssize_t>(count));
+	if (!result) {
+		delete[] views;
+		delete[] indices;
+		return nullptr;
+	}
+
+	for (size_t i = 0; i < count; ++i) {
+		PyObject *data = PyBytes_FromStringAndSize(
+			static_cast<const char *>(views[i].ptr), static_cast<Py_ssize_t>(views[i].actual_size)
+		);
+
+		if (!data) {
+			Py_DECREF(result);
+			delete[] views;
+			delete[] indices;
+			return nullptr;
+		}
+
+		PyObject *item = Py_BuildValue(
+			"OInn",
+			data,
+			static_cast<unsigned int>(views[i].type_id),
+			static_cast<Py_ssize_t>(views[i].actual_size),
+			static_cast<Py_ssize_t>(indices[i])
+		);
+
+		Py_DECREF(data);
+		if (!item) {
+			Py_DECREF(result);
+			delete[] views;
+			delete[] indices;
+			return nullptr;
+		}
+
+		PyList_SET_ITEM(result, static_cast<Py_ssize_t>(i), item); /* steals ref */
+	}
+
+	delete[] views;
+	delete[] indices;
+
+	return result;
+}
+
+static PyObject *TachyonStarBus_commit(TachyonStarBus *self, PyObject *Py_UNUSED(ignored)) {
+	if (self->star == nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is not initialized.");
+		return nullptr;
+	}
+
+	if (const tachyon_error_t err = tachyon_star_commit(self->star); err != TACHYON_SUCCESS) {
+		return raise_tachyon_error(err);
+	}
+
+	Py_RETURN_NONE;
+}
+
+static PyObject *TachyonStarBus_acquire_tx(TachyonStarBus *self, PyObject *args, PyObject *kwds) {
+	static char *kwlist[] = {const_cast<char *>("spoke_idx"), const_cast<char *>("size"), nullptr};
+	Py_ssize_t	 spoke_idx;
+	Py_ssize_t	 size;
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "nn", kwlist, &spoke_idx, &size)) {
+		return nullptr;
+	}
+
+	if (self->star == nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is not initialized.");
+		return nullptr;
+	}
+
+	void *ptr;
+	Py_BEGIN_ALLOW_THREADS;
+	ptr = tachyon_star_acquire_tx(self->star, static_cast<size_t>(spoke_idx), static_cast<size_t>(size));
+	Py_END_ALLOW_THREADS;
+
+	if (ptr == nullptr) {
+		Py_RETURN_NONE;
+	}
+
+	return PyMemoryView_FromMemory(static_cast<char *>(ptr), size, PyBUF_WRITE);
+}
+
+static PyObject *TachyonStarBus_commit_tx(TachyonStarBus *self, PyObject *args, PyObject *kwds) {
+	static char *kwlist[] = {
+		const_cast<char *>("spoke_idx"),
+		const_cast<char *>("actual_size"),
+		const_cast<char *>("type_id"),
+		nullptr,
+	};
+	Py_ssize_t	 spoke_idx;
+	Py_ssize_t	 actual_size;
+	unsigned int type_id;
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "nnI", kwlist, &spoke_idx, &actual_size, &type_id)) {
+		return nullptr;
+	}
+
+	if (self->star == nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is not initialized.");
+		return nullptr;
+	}
+
+	const tachyon_error_t err =
+		tachyon_star_commit_tx(self->star, static_cast<size_t>(spoke_idx), static_cast<size_t>(actual_size), type_id);
+	if (err != TACHYON_SUCCESS) {
+		return raise_tachyon_error(err);
+	}
+
+	Py_RETURN_NONE;
+}
+
+static PyObject *TachyonStarBus_rollback_tx(TachyonStarBus *self, PyObject *args, PyObject *kwds) {
+	static char *kwlist[] = {const_cast<char *>("spoke_idx"), nullptr};
+	Py_ssize_t	 spoke_idx;
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "n", kwlist, &spoke_idx)) {
+		return nullptr;
+	}
+
+	if (self->star == nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is not initialized.");
+		return nullptr;
+	}
+
+	tachyon_star_rollback_tx(self->star, static_cast<size_t>(spoke_idx));
+	Py_RETURN_NONE;
+}
+
+static PyObject *TachyonStarBus_flush(TachyonStarBus *self, PyObject *args, PyObject *kwds) {
+	static char *kwlist[] = {const_cast<char *>("spoke_idx"), nullptr};
+	Py_ssize_t	 spoke_idx;
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "n", kwlist, &spoke_idx)) {
+		return nullptr;
+	}
+
+	if (self->star == nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is not initialized.");
+		return nullptr;
+	}
+
+	tachyon_star_flush(self->star, static_cast<size_t>(spoke_idx));
+	Py_RETURN_NONE;
+}
+
+static PyObject *TachyonStarBus_destroy(TachyonStarBus *self, PyObject *Py_UNUSED(ignored)) {
+	if (self->star != nullptr) {
+		tachyon_star_destroy(self->star);
+		self->star = nullptr;
+	}
+
+	Py_RETURN_NONE;
+}
+
+static PyObject *TachyonStarBus_n_spokes(const TachyonStarBus *self, PyObject *Py_UNUSED(ignored)) {
+	if (self->star == nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is not initialized.");
+		return nullptr;
+	}
+
+	return PyLong_FromSize_t(tachyon_star_n_spokes(self->star));
+}
+
+static PyObject *TachyonStarBus_get_state(TachyonStarBus *self, PyObject *args, PyObject *kwds) {
+	static char *kwlist[] = {const_cast<char *>("spoke_idx"), nullptr};
+	Py_ssize_t	 spoke_idx;
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "n", kwlist, &spoke_idx)) {
+		return nullptr;
+	}
+
+	if (self->star == nullptr) {
+		PyErr_SetString(PyExc_RuntimeError, "TachyonStarBus is not initialized.");
+		return nullptr;
+	}
+
+	return PyLong_FromUnsignedLong(
+		static_cast<unsigned long>(tachyon_star_get_state(self->star, static_cast<size_t>(spoke_idx)))
+	);
+}
+
+static PyMethodDef TachyonStarBusMethods[11] = {
+	{"create", reinterpret_cast<PyCFunction>(TachyonStarBus_create), METH_VARARGS | METH_KEYWORDS, nullptr},
+	{"poll", reinterpret_cast<PyCFunction>(TachyonStarBus_poll), METH_VARARGS | METH_KEYWORDS, nullptr},
+	{"commit", reinterpret_cast<PyCFunction>(TachyonStarBus_commit), METH_NOARGS, nullptr},
+	{"acquire_tx", reinterpret_cast<PyCFunction>(TachyonStarBus_acquire_tx), METH_VARARGS | METH_KEYWORDS, nullptr},
+	{"commit_tx", reinterpret_cast<PyCFunction>(TachyonStarBus_commit_tx), METH_VARARGS | METH_KEYWORDS, nullptr},
+	{"rollback_tx", reinterpret_cast<PyCFunction>(TachyonStarBus_rollback_tx), METH_VARARGS | METH_KEYWORDS, nullptr},
+	{"flush", reinterpret_cast<PyCFunction>(TachyonStarBus_flush), METH_VARARGS | METH_KEYWORDS, nullptr},
+	{"destroy", reinterpret_cast<PyCFunction>(TachyonStarBus_destroy), METH_NOARGS, nullptr},
+	{"n_spokes", reinterpret_cast<PyCFunction>(TachyonStarBus_n_spokes), METH_NOARGS, nullptr},
+	{"get_state", reinterpret_cast<PyCFunction>(TachyonStarBus_get_state), METH_VARARGS | METH_KEYWORDS, nullptr},
+	{nullptr, nullptr, 0, nullptr}
+};
+
 /**
  * @brief Module execution function called during multiphase initialization
  * @param m The module object
@@ -1817,6 +2165,20 @@ static int tachyon_exec(PyObject *m) {
 		return -1;
 	}
 
+	/* Initialize TachyonStarBus Type */
+	TachyonStarBusType.tp_name		= "tachyon.TachyonStarBus";
+	TachyonStarBusType.tp_basicsize = sizeof(TachyonStarBus);
+	TachyonStarBusType.tp_itemsize	= 0;
+	TachyonStarBusType.tp_new		= reinterpret_cast<newfunc>(TachyonStarBus_new);
+	TachyonStarBusType.tp_dealloc	= reinterpret_cast<destructor>(TachyonStarBus_dealloc);
+	TachyonStarBusType.tp_flags		= Py_TPFLAGS_DEFAULT;
+	TachyonStarBusType.tp_doc		= "Tachyon Star Bus";
+	TachyonStarBusType.tp_methods	= TachyonStarBusMethods;
+
+	if (PyType_Ready(&TachyonStarBusType) < 0) {
+		return -1;
+	}
+
 	Py_INCREF(&TachyonBusType);
 	if (PyModule_AddObject(m, "TachyonBus", reinterpret_cast<PyObject *>(&TachyonBusType)) < 0) {
 		Py_DECREF(&TachyonBusType);
@@ -1893,8 +2255,23 @@ static int tachyon_exec(PyObject *m) {
 		return -1;
 	}
 
+	Py_INCREF(&TachyonStarBusType);
+	if (PyModule_AddObject(m, "TachyonStarBus", reinterpret_cast<PyObject *>(&TachyonStarBusType)) < 0) {
+		Py_DECREF(&TachyonStarBusType);
+		Py_DECREF(&TachyonRpcBusType);
+		Py_DECREF(&RpcRxGuardType);
+		Py_DECREF(&RpcTxGuardType);
+		Py_DECREF(&RxMsgViewType);
+		Py_DECREF(&RxBatchGuardType);
+		Py_DECREF(&RxGuardType);
+		Py_DECREF(&TxGuardType);
+		Py_DECREF(&TachyonBusType);
+		return -1;
+	}
+
 	TachyonError = PyErr_NewException("tachyon.TachyonError", nullptr, nullptr);
 	if (!TachyonError) {
+		Py_DECREF(&TachyonStarBusType);
 		Py_DECREF(&TachyonRpcBusType);
 		Py_DECREF(&RpcRxGuardType);
 		Py_DECREF(&RpcTxGuardType);
@@ -1909,6 +2286,7 @@ static int tachyon_exec(PyObject *m) {
 	Py_INCREF(TachyonError);
 	if (PyModule_AddObject(m, "TachyonError", TachyonError) < 0) {
 		Py_DECREF(TachyonError);
+		Py_DECREF(&TachyonStarBusType);
 		Py_DECREF(&TachyonRpcBusType);
 		Py_DECREF(&RpcRxGuardType);
 		Py_DECREF(&RpcTxGuardType);
@@ -1923,6 +2301,7 @@ static int tachyon_exec(PyObject *m) {
 	PeerDeadError = PyErr_NewException("tachyon.PeerDeadError", TachyonError, nullptr);
 	if (!PeerDeadError) {
 		Py_DECREF(TachyonError);
+		Py_DECREF(&TachyonStarBusType);
 		Py_DECREF(&TachyonRpcBusType);
 		Py_DECREF(&RpcRxGuardType);
 		Py_DECREF(&RpcTxGuardType);
@@ -1938,6 +2317,7 @@ static int tachyon_exec(PyObject *m) {
 	if (PyModule_AddObject(m, "PeerDeadError", PeerDeadError) < 0) {
 		Py_DECREF(PeerDeadError);
 		Py_DECREF(TachyonError);
+		Py_DECREF(&TachyonStarBusType);
 		Py_DECREF(&TachyonRpcBusType);
 		Py_DECREF(&RpcRxGuardType);
 		Py_DECREF(&RpcTxGuardType);
