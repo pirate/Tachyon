@@ -286,6 +286,11 @@ export class Bus implements Disposable {
 		this.close();
 	}
 
+	/** @internal */
+	public get _handle(): object {
+		return this.#handle;
+	}
+
 	#assertOpen(): void {
 		if (this.#closed) throw new Error('Bus: this bus has been closed.');
 	}
