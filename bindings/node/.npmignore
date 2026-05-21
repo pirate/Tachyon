@@ -1,5 +1,6 @@
 benchmark/
 build/
+examples/
 src/ts/
 test/
 tsconfig.json
