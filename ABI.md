@@ -72,6 +72,7 @@ No bump required for:
 | `0x02`  | `msg_alignment` added to `TachyonHandshake` and `ArenaHeader`                                                                                |
 | `0x03`  | `type_id` encoding: bits [31:16] = route_id (reserved for RPC), bits [15:0] = msg_type.                                                      |
 | `0x04`  | `TachyonHandshake` extended: `capacity_fwd/rev`, `shm_size_fwd/rev`, `flags`. `MessageHeader` extended: `correlation_id` added at offset 16. |
+| `0x04`  | `tachyon_star_*` API added in v0.6.0. No wire format change. Star is a user-space aggregator above existing SPSC arenas.                     |
 
 ---
 
@@ -101,6 +102,42 @@ For SPSC buses both fields are `0`. For RPC buses:
 - `shm_size_rev` = `sizeof(MemoryLayout) + capacity_rev`.
 
 Both fds transferred in a single `sendmsg` call with `cmsg_len = CMSG_LEN(2 * sizeof(int))`.
+
+---
+
+## Star Bus ABI
+
+### Wire format
+
+`tachyon_star_create()` performs no wire exchange and emits no new handshake fields. Each spoke is an independent SPSC
+bus with its own `TachyonHandshake` negotiated during `tachyon_bus_connect()`. The star is a user-space aggregation
+layer above N existing SPSC arenas; the `MessageHeader` layout, `SKIP_MARKER`, and all arena invariants are inherited
+unchanged from each underlying bus.
+
+### No new ABI version bump
+
+The star topology does not require a version bump. No new fields are added to `TachyonHandshake`, `MessageHeader`,
+`MemoryLayout`, or `ArenaHeader`. A spoke producer compiled against any ABI version that is compatible with the hub's
+connector can be polled by a `StarBus` without modification.
+
+### `tachyon_star_commit` and `pending_` state
+
+`tachyon_star_commit()` advances the consumer tail for each spoke that contributed messages in the last
+`tachyon_star_poll()` call. It uses the internal `pending_` state accumulated during the poll; the view’s array is not
+passed back. This is an intentional design decision: the caller is not required to retain the `tachyon_msg_view_t` array
+between `poll()` and `commit()`.
+
+This differs from `tachyon_commit_rx_batch(bus, views, count)`, which takes the view’s array explicitly. Callers
+migrating from the batch API should not expect the same signature here.
+
+Callers must call `commit()` before the next `poll()`. Calling `poll()` without a preceding `commit()` accumulates
+pending counts in `pending_` and may cause incorrect tail advancement on the next commit.
+
+### FatalError isolation
+
+`TACHYON_STATE_FATAL_ERROR` on one spoke does not propagate to other spokes or to the `tachyon_star_t` handle itself.
+`tachyon_star_get_state()` reads the atomic state of the underlying connector arena for the specified spoke index.
+Out-of-range `spoke_idx` returns `TACHYON_STATE_UNKNOWN` (5).
 
 ---
 
