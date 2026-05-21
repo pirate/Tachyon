@@ -23,9 +23,11 @@ add_library(tachyon_node SHARED
 		src/native/tachyon_node.cpp
 		src/native/_core_local/src/arena.cpp
 		src/native/_core_local/src/shm.cpp
+		src/native/_core_local/src/star.cpp
 		src/native/_core_local/src/transport_uds.cpp
 		src/native/_core_local/src/tachyon_c.cpp
 		src/native/_core_local/src/tachyon_rpc.cpp
+		src/native/_core_local/src/tachyon_star.cpp
 )
 
 set_target_properties(tachyon_node PROPERTIES
@@ -37,6 +39,7 @@ target_include_directories(tachyon_node PRIVATE
 		${CMAKE_JS_INC}
 		${NODE_ADDON_API_DIR}
 		src/native/_core_local/include
+		src/native/_core_local/src
 )
 
 target_compile_definitions(tachyon_node PRIVATE NAPI_VERSION=8)
