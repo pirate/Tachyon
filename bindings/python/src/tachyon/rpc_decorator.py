@@ -31,13 +31,13 @@ class RpcEndpoint:
 	"""
 
 	def __init__(self, fn: Callable[[memoryview], bytes], msg_type: int) -> None:
-		self._fn      = fn
+		self._fn = fn
 		self.msg_type = msg_type
-		self.__name__     = fn.__name__
+		self.__name__ = fn.__name__
 		self.__qualname__ = fn.__qualname__
-		self.__module__   = fn.__module__
-		self.__doc__      = fn.__doc__
-		self.__wrapped__  = fn
+		self.__module__ = fn.__module__
+		self.__doc__ = fn.__doc__
+		self.__wrapped__ = fn
 
 	def __call__(self, payload: bytes | memoryview) -> bytes:
 		mv = memoryview(payload) if isinstance(payload, (bytes, bytearray)) else payload
