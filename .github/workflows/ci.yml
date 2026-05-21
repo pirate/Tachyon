@@ -177,39 +177,12 @@ jobs:
           echo "Smoke test passed successfully."
 
   python:
-    name: Python bindings (Linux)
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Environment
-        uses: ./.github/actions/setup-tachyon-env
-        with:
-          lang: 'python'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends python3-dev python3-venv
-          sudo mkdir -p /usr/local/include/dlpack
-          sudo curl -fsSL -o /usr/local/include/dlpack/dlpack.h \
-            https://raw.githubusercontent.com/dmlc/dlpack/main/include/dlpack/dlpack.h
-
-      - name: Install and test
-        run: |
-          python3 -m venv .venv
-          .venv/bin/pip install ./bindings/python pytest
-          .venv/bin/pytest bindings/python/tests/ -v
-
-  python_macos:
     name: Python bindings (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [ macos-26, macos-26-intel ]
+        runner: [ ubuntu-24.04, macos-26, macos-26-intel ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -224,6 +197,21 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Download DLPack (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /usr/local/include/dlpack
+          sudo curl -fsSL -o /usr/local/include/dlpack/dlpack.h \
+            https://raw.githubusercontent.com/dmlc/dlpack/main/include/dlpack/dlpack.h
+
+      - name: Download DLPack (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo mkdir -p /usr/local/lib/dlpack
+          sudo curl -fsSL -o /usr/local/lib/dlpack/dlpack.h \
+            https://raw.githubusercontent.com/dmlc/dlpack/main/include/dlpack/dlpack.h
+
+
       - name: Install and test
         run: |
           python3 -m venv .venv
@@ -231,39 +219,12 @@ jobs:
           .venv/bin/pytest bindings/python/tests/ -v
 
   rust:
-    name: Rust bindings (Linux)
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Environment
-        uses: ./.github/actions/setup-tachyon-env
-        with:
-          lang: 'rust'
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Format Check
-        working-directory: bindings/rust
-        run: cargo fmt --all -- --check
-
-      - name: Lint
-        working-directory: bindings/rust
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Test
-        working-directory: bindings/rust
-        run: cargo test
-
-  rust_macos:
     name: Rust bindings (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [ macos-26, macos-26-intel ]
+        runner: [ ubuntu-24.04, macos-26, macos-26-intel ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -289,43 +250,12 @@ jobs:
         run: cargo test
 
   go:
-    name: Go bindings (Linux)
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Environment
-        uses: ./.github/actions/setup-tachyon-env
-        with:
-          lang: 'go'
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.23'
-          cache-dependency-path: 'bindings/go'
-
-      - name: Go Test
-        env:
-          CGO_ENABLED: "1"
-        working-directory: bindings/go
-        run: go test -v -count=1 -timeout=120s ./tachyon/...
-
-      - name: Go Vet
-        env:
-          CGO_ENABLED: "1"
-        working-directory: bindings/go
-        run: go vet ./tachyon/...
-
-  go_macos:
     name: Go bindings (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [ macos-26, macos-26-intel ]
+        runner: [ ubuntu-24.04, macos-26, macos-26-intel ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -354,47 +284,12 @@ jobs:
         run: go vet ./tachyon/...
 
   jvm:
-    name: JVM bindings (${{ matrix.lang }}, Linux)
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        lang: [ java, kotlin ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Environment
-        uses: ./.github/actions/setup-tachyon-env
-        with:
-          lang: 'java'
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
-          cache-dependency-path: |
-            bindings/${{ matrix.lang }}/*.gradle*
-            bindings/${{ matrix.lang }}/**/gradle-wrapper.properties
-
-      - name: Build Native library
-        run: |
-          cmake --preset clang-ci
-          cmake --build --preset clang-ci --target tachyon_java_resources
-
-      - name: Gradle Test
-        working-directory: bindings/${{ matrix.lang }}
-        run: ./gradlew test --no-daemon
-
-  jvm_macos:
     name: JVM bindings (${{ matrix.lang }}, ${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [ macos-26, macos-26-intel ]
+        runner: [ ubuntu-24.04, macos-26, macos-26-intel ]
         lang: [ java, kotlin ]
     steps:
       - name: Checkout
@@ -415,7 +310,14 @@ jobs:
             bindings/${{ matrix.lang }}/*.gradle*
             bindings/${{ matrix.lang }}/**/gradle-wrapper.properties
 
-      - name: Build Native library
+      - name: Build Native library (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake --preset clang-ci
+          cmake --build --preset clang-ci --target tachyon_java_resources
+
+      - name: Build Native library (macOS)
+        if: runner.os == 'macOS'
         run: |
           cmake --preset macos-ci
           cmake --build --preset macos-ci --target tachyon_java_resources --parallel
@@ -425,59 +327,12 @@ jobs:
         run: ./gradlew test --no-daemon
 
   nodejs:
-    name: Node.js bindings Linux (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [ 20, 22, 24 ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Environment
-        uses: ./.github/actions/setup-tachyon-env
-        with:
-          lang: 'node'
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-          cache-dependency-path: bindings/node/package-lock.json
-
-      - name: Install dependencies & build native library
-        working-directory: bindings/node
-        run: npm install && npm run build:native
-
-      - name: Type check
-        working-directory: bindings/node
-        run: npx tsc --noEmit
-
-      - name: Format check
-        working-directory: bindings/node
-        run: npm run format:check
-
-      - name: Lint check
-        working-directory: bindings/node
-        run: npm run lint
-
-      - name: Build TypeScript
-        working-directory: bindings/node
-        run: npm run build:ts
-
-      - name: Tests
-        working-directory: bindings/node
-        run: npm test
-
-  nodejs_macos:
     name: Node.js bindings ${{ matrix.runner }} (Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        runner: [ macos-26, macos-26-intel ]
+        runner: [ ubuntu-24.04, macos-26, macos-26-intel ]
         node-version: [ 20, 22, 24 ]
     steps:
       - name: Checkout
@@ -519,9 +374,13 @@ jobs:
         working-directory: bindings/node
         run: npm test
 
-  csharp_linux:
-    name: C# Bindings (Linux)
-    runs-on: ubuntu-24.04
+  csharp:
+    name: C# Bindings (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ ubuntu-24.04, macos-26, macos-26-intel ]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -539,44 +398,15 @@ jobs:
             10.x
 
       - name: Build native library
+        if: runner.os == 'Linux'
         run: |
           cmake --preset clang-ci
           cmake --build --preset clang-ci --parallel
           mkdir -p bindings/csharp/src/TachyonIpc/runtimes/linux-x64/native
           cp build/clang-ci/core/libtachyon.so bindings/csharp/src/TachyonIpc/runtimes/linux-x64/native/
 
-      - name: Build
-        working-directory: bindings/csharp
-        run: dotnet build src/TachyonIpc/
-
-      - name: Test
-        working-directory: bindings/csharp
-        run: dotnet test tests/TachyonIpc/
-
-  csharp_macos:
-    name: C# Bindings (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ macos-26, macos-26-intel ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Environment
-        uses: ./.github/actions/setup-tachyon-env
-        with:
-          lang: 'c#'
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: |
-            8.x
-            10.x
-
       - name: Build Native library
+        if: runner.os == 'macOS'
         run: |
           cmake --preset macos-ci
           cmake --build --preset macos-ci --parallel
