@@ -29,6 +29,8 @@ Called once per `tachyon_bus_listen()`. All syscalls are one-shot except poll.
 On macOS, `memfd_create` / `ftruncate` / `fchmod` / `fcntl(F_ADD_SEALS)` are replaced by `shm_open` + immediate
 `unlink` + `ftruncate`. The rest is identical.
 
+---
+
 ### RPC handshake difference
 
 `tachyon_rpc_listen` calls `uds_export_shm_rpc` instead of `uds_export_shm`. It creates two `SharedMemory` instances
@@ -100,3 +102,54 @@ its own syscalls independently of Tachyon.
 For polyglot deployments, apply containment at the process boundary via a supervisor (`systemd SystemCallFilter=`,
 container seccomp profile) rather than from within the process. Pre-built profiles for C++/C only deployments are in
 `contrib/seccomp/`.
+
+---
+
+## Star Bus syscall profile
+
+### Handshake
+
+`tachyon_star_create()` performs no syscalls of its own. It is a pure user-space operation that stores the N connector
+handles and calibrates the TSC polling budget via `rdtsc()` (`RDTSC` on x86) (user-space instruction, no syscall). All
+handshake syscalls occur during the preceding `tachyon_bus_connect()` calls, one full connect sequence per spoke,
+identical to the SPSC connect table above.
+
+### Hot path
+
+The star hot path adds zero new syscall types beyond the single-bus SPSC profile.
+
+| Syscall             | Condition                             | Notes                                            |
+|---------------------|---------------------------------------|--------------------------------------------------|
+| `futex(FUTEX_WAIT)` | Per-spoke, consumer only, hybrid mode | One futex domain per spoke; they are independent |
+| `futex(FUTEX_WAKE)` | Per-spoke, producer only, hybrid mode | Skipped in pure-spin mode                        |
+
+`tachyon_star_poll()` iterates over all N connector arenas in user space. `RDTSC` is used to check the budget deadline
+on each iteration; it is a user-space instruction and does not enter the kernel. The poll exits via `cpu_relax()`
+(`PAUSE` on x86) when all spokes are empty within the budget.
+
+`tachyon_star_commit()` advances the consumer tail of each spoke that had messages, using atomic stores.
+
+In pure-spin mode (all N spokes set via `tachyon_bus_set_polling_mode(bus, 1)` before `tachyon_star_create()`), the hot
+path contains zero-syscall.
+
+### NUMA binding at create
+
+If `node_ids` is non-null, `tachyon_star_create()` calls`tachyon_bus_set_numa_node()` for each spoke with a non-negative
+entry. Each call emits one `mbind` syscall, identical to the single-bus NUMA section above. This is a one-shot setup
+cost, not a recurring hot-path cost.
+
+| Syscall | Source                                                | Reason                                                     | Conditional                                    |
+|---------|-------------------------------------------------------|------------------------------------------------------------|------------------------------------------------|
+| `mbind` | `tachyon_star_create` via `tachyon_bus_set_numa_node` | Migrates each spoke's SHM pages to the requested NUMA node | Once per spoke with non-negative `node_ids[i]` |
+
+### Teardown
+
+`tachyon_star_destroy()` is a user-space operation. It decrements the ref-count on each stored bus handle; when a
+ref-count reaches zero, `tachyon_bus_destroy()` is called for that handle, emitting `munmap` + `close` as in the
+single-bus teardown table above.
+
+### Binding notes
+
+The zero-syscall hot path applies to C/C++ and Rust only. Language binding overheads are unchanged from the SPSC case.
+Go, Python, Java, and Node.js runtimes emit their own syscalls independently; see the binding notes in the SPSC hot-path
+section.
