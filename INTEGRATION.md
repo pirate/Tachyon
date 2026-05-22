@@ -383,3 +383,158 @@ an error instead.
 Tachyon uses `memfd_create` + `mmap(MAP_POPULATE)`, which allocates physical pages at `listen()` time.
 `CAPACITY = 1 << 23` (8 MB) costs 8 MB of RAM in the producer process and 8 MB in the consumer process (two `mmap`
 mappings of the same `memfd`). The physical pages are shared, total RAM cost is 8 MB, not 16.
+
+---
+
+## Star Bus
+
+The `StarBus` (`tachyon_star_t`) aggregates N independent SPSC rings under a single round-robin polling loop. One
+consumer process owns the `StarBus`; each producer (spoke) owns one `tachyon_bus_t` on the listener side. The hub holds
+one connector-side `tachyon_bus_t` per spoke.
+
+### Handshake and topology
+
+Each spoke is a fully independent SPSC bus. The hub calls `tachyon_bus_connect()` for each spoke, then passes all
+connector handles to `tachyon_star_create()`. The star ref-counts each bus internally; the caller may destroy its
+handles immediately after `create()` returns.
+
+Socket lifecycle is identical to the single-bus case: each path is unlinked after the handshake, and the socket file no
+longer exists once the hub has connected. The hot path runs entirely through shared memory.
+
+### Hub-and-spoke pattern
+
+```c++
+// Spokes start first and call tachyon_bus_listen.
+// Hub connects to all spokes, then creates the star.
+tachyon_bus_t *buses[N];
+for (size_t i = 0; i < N; ++i)
+    tachyon_bus_connect(spoke_path(i), &buses[i]);
+
+tachyon_star_t *star = nullptr;
+tachyon_star_create(buses, N, nullptr, &star);
+
+// Hub owns the hot path.
+static constexpr size_t MAX_BATCH = N * 32;
+tachyon_msg_view_t views[MAX_BATCH];
+size_t             spoke_indices[MAX_BATCH];
+
+for (;;) {
+    const size_t count = tachyon_star_poll(star, views, MAX_BATCH, /*budget_us=*/5000, spoke_indices);
+    for (size_t i = 0; i < count; ++i) {
+        process(views[i].ptr, views[i].actual_size, spoke_indices[i]);
+    }
+
+    if (count > 0) {
+        tachyon_star_commit(star);
+    }
+}
+```
+
+`tachyon_star_poll` drains messages from all N spokes in a single call, round-robining until either `max_total` messages
+have been collected or the TSC-bounded `budget_us` has elapsed. `tachyon_star_commit` advances the consumer tail for
+every spoke that contributed messages; it uses the internal `pending_` state accumulated during the poll. The view's
+array is not passed back to `commit`.
+
+### Budget tuning
+
+`budget_us` is a TSC-bounded wall-clock budget. The poll loop exits when `rdtsc() >= deadline` even if messages remain.
+Choose it based on the end-to-end latency budget for your application tier.
+
+| Regime                                  | Recommended `budget_us` | Notes                                         |
+|-----------------------------------------|-------------------------|-----------------------------------------------|
+| Ultra-low latency (HFT, realtime audio) | 1 to 10                 | Tight deadline; relies on pure-spin mode      |
+| Market data aggregation                 | 50 to 500               | Balance throughput vs. per-message latency    |
+| General fan-in, batch analytics         | 1000 to 10000           | Maximise batch size; amortise commit overhead |
+
+If the budget expires before any message arrives, `poll()` returns 0 and `commit()` is a no-op. Calling `commit()` on an
+empty poll is safe.
+
+A budget that is too short under load causes `poll()` to return after draining fewer spokes than intended. Increase
+`budget_us` or call `poll()` in a tight loop without sleeping.
+
+### Pure-spin mode
+
+Call `tachyon_bus_set_polling_mode(bus[i], 1)` on each connector-side handle before passing it to
+`tachyon_star_create()`. This tells each producer that the consumer (hub) will never sleep, eliminating the
+`atomic_thread_fence(seq_cst)` and `consumer_sleeping` load on every producer flush. Only enable this when the hub
+thread is dedicated and never yields.
+
+```c++
+for (size_t i = 0; i < N; ++i) {
+    tachyon_bus_connect(spoke_path(i), &buses[i]);
+    tachyon_bus_set_polling_mode(buses[i], 1);
+}
+tachyon_star_create(buses, N, nullptr, &star);
+```
+
+### NUMA binding across nodes
+
+When producers and the hub run on different NUMA nodes, all ring buffer accesses cross the interconnect.
+`tachyon_star_create()` accepts an optional `node_ids` array (one entry per spoke) to bind each spoke's SHM pages to the
+requested NUMA node immediately after the star is created.
+
+```c++
+// Spoke 0 and 1 producers are on node 0; spoke 2 is on node 1.
+const int node_ids[] = {0, 0, 1};
+tachyon_star_create(buses, 3, node_ids, &star);
+```
+
+Negative values skip binding for that spoke. `nullptr` disables NUMA binding entirely and is appropriate when all
+processes are confined to a single node.
+
+Call `tachyon_bus_set_numa_node()` directly on individual connector handles before `tachyon_star_create()` if you need
+finer control (for example, binding only some spokes before the star is assembled).
+
+### FatalError isolation per spoke
+
+Each spoke is an independent SPSC ring with its own state machine. A `TACHYON_STATE_FATAL_ERROR` on one spoke does not
+affect the others.
+
+```c++
+for (size_t i = 0; i < count; ++i) {
+    const size_t spoke = spoke_indices[i];
+
+    if (tachyon_star_get_state(star, spoke) == TACHYON_STATE_FATAL_ERROR) {
+        handle_fatal(spoke);
+        continue;
+    }
+
+    process(views[i].ptr, views[i].actual_size, spoke);
+}
+tachyon_star_commit(star);
+```
+
+`tachyon_star_get_state(star, spoke_idx)` reads the atomic state of the underlying connector arena for that spoke. The
+check is advisory; messages already returned by `poll()` remain accessible until `commit()` is called.
+
+### Supervisor loop
+
+The star does not detect producer crashes (same contract as SPSC). If a spoke producer exits cleanly or crashes, the
+hub's `poll()` simply never receives another message from that spoke. Detect this externally via `pidfd`, `SIGCHLD`, or
+a dedicated heartbeat SPSC bus.
+
+To accept a new producer on a spoke that has gone silent, destroy the star, destroy the affected bus, call
+`tachyon_bus_connect()` on the new listener, and recreate the star with the replacement handle. There is no
+`replace_spoke` operation; the star is immutable after creation.
+
+```c++
+// Replace spoke 2 after its producer was restarted.
+tachyon_star_destroy(star);
+tachyon_bus_destroy(buses[2]);
+
+tachyon_bus_connect(spoke_path(2), &buses[2]);
+tachyon_bus_set_polling_mode(buses[2], 1);
+tachyon_star_create(buses, N, node_ids, &star);
+```
+
+### Capacity sizing for multi-spoke rings
+
+Use the same formula as the single-bus case per spoke. The hub must commit before the slowest spoke's ring overflows.
+With N spokes each sending at rate R msgs/s and a poll budget of B microseconds, the minimum per-spoke capacity is:
+
+```
+CAPACITY_per_spoke >= R * (B / 1_000_000) * aligned_message_size * safety_margin
+```
+
+A safety margin of 4x is recommended for bursty producers. Spokes do not share memory; each ring is independent and
+sized independently.
