@@ -1,29 +1,29 @@
 import type { BatchController, RxMessage } from './batch.ts';
 import { RxBatch } from './batch.ts';
 import { PeerDeadError } from './error.ts';
-import type { RxController, RxSlot, TxController } from './guards.ts';
+import type { RxController, TxController } from './guards.ts';
 import { RxGuard, TxGuard } from './guards.ts';
 
 const TACHYON_STATE_FATAL_ERROR = 4;
 
-export interface RawRx {
-	readonly data: Buffer | Uint8Array;
+export interface RawRx<T extends Uint8Array = Buffer> {
+	readonly data: T;
 	readonly typeId: number;
 	readonly actualSize: number;
 }
 
-export interface RawBatchMessage {
-	readonly data: Buffer | Uint8Array;
+export interface RawBatchMessage<T extends Uint8Array = Buffer> {
+	readonly data: T;
 	readonly typeId: number;
 	readonly size: number;
 }
 
-export interface BusHandle {
+export interface BusHandle<T extends Uint8Array = Buffer> {
 	close(): void;
 
 	send(data: Buffer | Uint8Array, typeId?: number): void;
 
-	acquireTx(maxSize: number): Buffer | Uint8Array;
+	acquireTx(maxSize: number): T;
 
 	commitTx(actualSize: number, typeId: number): void;
 
@@ -33,9 +33,9 @@ export interface BusHandle {
 
 	flush(): void;
 
-	acquireRx(spinThreshold?: number): RawRx | null;
+	acquireRx(spinThreshold?: number): RawRx<T> | null;
 
-	drainBatch?(maxMsgs: number, spinThreshold?: number): RawBatchMessage[];
+	drainBatch?(maxMsgs: number, spinThreshold?: number): RawBatchMessage<T>[];
 
 	commitRx(): void;
 
@@ -48,24 +48,27 @@ export interface BusHandle {
 	getState(): number;
 }
 
-interface BusBaseOptions<TRecv extends Buffer | Uint8Array> {
+interface BusBaseOptions<T extends Uint8Array> {
 	readonly defaultSpinThreshold: number;
 	readonly retryNullRecv: boolean;
-	readonly nullRecvMessage: string;
-	readonly copyData: (data: Buffer | Uint8Array) => TRecv;
+	readonly copyData: (data: T) => T;
 }
 
 /**
  * Shared JS surface for the native Node addon and the browser WASM transport.
  * Platform entrypoints only adapt their handle shape; guard lifecycle, recv
  * copying, batching, close semantics, and API compatibility stay in one place.
+ *
+ * `T` is the platform byte-buffer type: `Buffer` for native Node, `Uint8Array`
+ * for browser WASM. It is threaded through the guards so a browser slot is never
+ * surfaced as a `Buffer`.
  */
-export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disposable {
-	#handle: BusHandle;
+export abstract class BusBase<T extends Uint8Array> implements Disposable {
+	#handle: BusHandle<T>;
 	#closed = false;
-	#options: BusBaseOptions<TRecv>;
+	#options: BusBaseOptions<T>;
 
-	protected constructor(handle: BusHandle, options: BusBaseOptions<TRecv>) {
+	protected constructor(handle: BusHandle<T>, options: BusBaseOptions<T>) {
 		this.#handle = handle;
 		this.#options = options;
 	}
@@ -102,20 +105,22 @@ export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disp
 	}
 
 	/**
-	 * Copies the next payload and returns it with its type discriminator. Node
-	 * blocks and retries EINTR through the native handle; browser WASM is
-	 * non-blocking and throws if no message is available.
+	 * Copies the next payload and returns it with its type discriminator. Native
+	 * Node blocks and retries EINTR through the native handle; browser WASM is
+	 * non-blocking and returns `null` when the ring is empty (an empty ring is a
+	 * normal poll outcome, not an error).
 	 *
+	 * @returns The next message, or `null` when no message is available (browser only).
 	 * @throws {PeerDeadError} If the bus has transitioned to fatal error state.
 	 */
-	public recv(spinThreshold = this.#options.defaultSpinThreshold): { data: TRecv; typeId: number } {
+	public recv(spinThreshold = this.#options.defaultSpinThreshold): { data: T; typeId: number } | null {
 		this.#assertOpen();
 		for (;;) {
 			if (this.#isFatal()) throw new PeerDeadError();
 			const result = this.#handle.acquireRx(spinThreshold);
 			if (result === null) {
 				if (this.#options.retryNullRecv) continue;
-				throw new Error(this.#options.nullRecvMessage);
+				return null;
 			}
 
 			const copy = this.#options.copyData(result.data);
@@ -128,7 +133,7 @@ export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disp
 	 * Acquires an exclusive TX slot of `maxSize` bytes.
 	 * Write into the slot via {@link TxGuard.bytes}, then commit or rollback.
 	 */
-	public acquireTx(maxSize: number): TxGuard {
+	public acquireTx(maxSize: number): TxGuard<T> {
 		this.#assertOpen();
 		const buf = this.#handle.acquireTx(maxSize);
 		const ctrl: TxController = {
@@ -142,7 +147,7 @@ export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disp
 				this.#handle.rollbackTx();
 			},
 		};
-		return new TxGuard(ctrl, buf as unknown as Buffer);
+		return new TxGuard<T>(ctrl, buf);
 	}
 
 	/**
@@ -151,7 +156,7 @@ export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disp
 	 *
 	 * @throws {PeerDeadError} If the bus has transitioned to fatal error state.
 	 */
-	public acquireRx(spinThreshold = this.#options.defaultSpinThreshold): RxGuard | null {
+	public acquireRx(spinThreshold = this.#options.defaultSpinThreshold): RxGuard<T> | null {
 		this.#assertOpen();
 		if (this.#isFatal()) throw new PeerDeadError();
 		const result = this.#handle.acquireRx(spinThreshold);
@@ -162,7 +167,7 @@ export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disp
 			},
 			getState: () => this.#handle.getState(),
 		};
-		return new RxGuard(ctrl, result.data as unknown as Buffer, result.typeId, result.actualSize);
+		return new RxGuard<T>(ctrl, result.data, result.typeId, result.actualSize);
 	}
 
 	/**
@@ -170,14 +175,14 @@ export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disp
 	 * amortize FFI cost; browser WASM falls back to the same guard lifecycle
 	 * with copied batch entries so all slots are released before returning.
 	 */
-	public drainBatch(maxMsgs: number, spinThreshold = this.#options.defaultSpinThreshold): RxBatch {
+	public drainBatch(maxMsgs: number, spinThreshold = this.#options.defaultSpinThreshold): RxBatch<T> {
 		this.#assertOpen();
 		if (this.#isFatal()) throw new PeerDeadError();
 
 		const raw =
 			this.#handle.drainBatch?.(maxMsgs, spinThreshold) ?? this.#drainBatchByAcquireRx(maxMsgs, spinThreshold);
-		const messages: RxMessage[] = raw.map((m) => ({
-			data: m.data as unknown as RxSlot,
+		const messages: RxMessage<T>[] = raw.map((m) => ({
+			data: m.data as RxMessage<T>['data'],
 			typeId: m.typeId,
 			size: m.size,
 		}));
@@ -187,7 +192,7 @@ export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disp
 			},
 			getState: () => this.#handle.getState(),
 		};
-		return new RxBatch(ctrl, messages);
+		return new RxBatch<T>(ctrl, messages);
 	}
 
 	/** Closes the bus and releases the underlying platform handle. Safe to call multiple times. */
@@ -202,8 +207,8 @@ export abstract class BusBase<TRecv extends Buffer | Uint8Array> implements Disp
 		this.close();
 	}
 
-	#drainBatchByAcquireRx(maxMsgs: number, spinThreshold: number): RawBatchMessage[] {
-		const messages: RawBatchMessage[] = [];
+	#drainBatchByAcquireRx(maxMsgs: number, spinThreshold: number): RawBatchMessage<T>[] {
+		const messages: RawBatchMessage<T>[] = [];
 		for (let i = 0; i < maxMsgs; i += 1) {
 			if (this.#isFatal()) throw new PeerDeadError();
 			const result = this.#handle.acquireRx(spinThreshold);

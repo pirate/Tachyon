@@ -90,13 +90,18 @@ producer.send(new Uint8Array([1, 2, 3, 4]), 7);
 const {data, typeId} = consumer.recv();
 ```
 
+The browser build runs the same C++ core compiled to WebAssembly with Emscripten, so the ring engine is identical to the
+native binding — there is no second implementation to keep in sync.
+
 Browsers do not expose POSIX shared memory or UNIX sockets, so `socketPath` is a page-local endpoint key rather than a
 filesystem socket. `listen()` creates the in-page WASM ring and `connect()` attaches to that ring. The message layout
-still uses Tachyon's 64-byte header, `type_id`, alignment, and skip-marker rules.
+still uses Tachyon's 64-byte header, `type_id`, alignment, and skip-marker rules. Capacities are capped at 2GB because
+wasm32 pointers are 32-bit.
 
-The browser implementation is intentionally direct-doorbell oriented. After JavaScript commits a message, call the Rust
-WASM work function immediately instead of scheduling a browser event or spinning in a poll loop. This avoids event-loop
-latency and keeps sub-microsecond round trips possible for in-page JS/Rust communication.
+The browser implementation is intentionally direct-doorbell oriented. After JavaScript commits a message, call the WASM
+work function immediately instead of scheduling a browser event or spinning in a poll loop. This avoids event-loop
+latency and keeps sub-microsecond round trips possible for in-page communication. Because the browser ring is
+non-blocking, `recv()` returns `null` when the ring is empty rather than throwing.
 
 Browser differences:
 

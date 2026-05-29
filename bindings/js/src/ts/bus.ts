@@ -165,9 +165,18 @@ export class Bus extends BusBase<Buffer> {
 		super(new NativeBusHandle(handle), {
 			defaultSpinThreshold: 10_000,
 			retryNullRecv: true,
-			nullRecvMessage: 'Bus.recv: interrupted while waiting for a message.',
 			copyData: (data) => Buffer.from(data),
 		});
+	}
+
+	/**
+	 * Blocks until the next message arrives, then copies and returns it.
+	 *
+	 * The native path retries through EINTR and parks on a futex, so it always
+	 * yields a message; unlike the browser transport it never returns `null`.
+	 */
+	public override recv(spinThreshold?: number): { data: Buffer; typeId: number } {
+		return super.recv(spinThreshold) as { data: Buffer; typeId: number };
 	}
 
 	/**

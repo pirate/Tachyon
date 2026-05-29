@@ -1,7 +1,7 @@
 {
 	"name": "@tachyon-ipc/core",
 	"version": "0.5.1",
-	"description": "Tachyon IPC bindings for Node.js",
+	"description": "Tachyon IPC bindings for Node.js and the browser (WASM)",
 	"keywords": [
 		"ipc",
 		"shm",
@@ -26,7 +26,7 @@
 	"scripts": {
 		"build": "npm run build:native && npm run build:ts",
 		"build:native": "cmake-js compile",
-		"build:ts": "tsc",
+		"build:ts": "tsc && node scripts/stage-wasm.mjs",
 		"build:wasm": "npm run cmake:wasm && npm run copy:wasm",
 		"clean": "rm -rf build dist",
 		"format": "prettier --write src/ts test/",
@@ -36,7 +36,9 @@
 		"install": "cmake-js compile",
 		"lint": "eslint src/ts",
 		"prebuild": "cmake-js compile --runtime node --runtime-version $(node -v | cut -c2-)",
-		"test": "mocha"
+		"test": "mocha",
+		"pretest:browser": "npm run build:ts",
+		"test:browser": "node test/browser_wasm.spec.mjs"
 	},
 	"dependencies": {
 		"node-addon-api": "^8.7.0"

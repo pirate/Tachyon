@@ -310,8 +310,29 @@ async function runCdp(webSocketDebuggerUrl) {
 		return result.result.value;
 	};
 
+	// The page opened via /json/new is still navigating when we attach, so the
+	// initial about:blank execution context is torn down underneath us. Retry
+	// until the document's real context is live before running the suite.
+	const evaluateResilient = async (expression, timeout) => {
+		const deadline = Date.now() + 15_000;
+		for (;;) {
+			try {
+				return await evaluate(expression, timeout);
+			} catch (error) {
+				const message = String(error?.message ?? error);
+				const transient =
+					message.includes('Execution context was destroyed') ||
+					message.includes('Cannot find context') ||
+					message.includes('uniqueContextId');
+				if (!transient || Date.now() > deadline) throw error;
+				await new Promise((resolveRetry) => setTimeout(resolveRetry, 50));
+			}
+		}
+	};
+
 	await call('Runtime.enable');
-	await evaluate(`new Promise((resolve, reject) => {
+	await evaluateResilient('document.readyState', 5_000);
+	await evaluateResilient(`new Promise((resolve, reject) => {
   const started = performance.now();
   const tick = () => {
     if (window.__tachyonBrowserDone) resolve(true);
@@ -320,7 +341,7 @@ async function runCdp(webSocketDebuggerUrl) {
   };
   tick();
 })`);
-	const results = JSON.parse(await evaluate('JSON.stringify(window.__tachyonBrowserResults)'));
+	const results = JSON.parse(await evaluateResilient('JSON.stringify(window.__tachyonBrowserResults)'));
 	ws.close();
 	return results;
 }
