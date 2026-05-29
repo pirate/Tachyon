@@ -1,7 +1,4 @@
-import init, {
-  WasmBus,
-  tachyon_browser_echo_once,
-} from "./pkg/tachyon_browser_wasm_example.js";
+import createTachyonExample from "./pkg/tachyon_example.js";
 
 const CAPACITY = 1 << 20;
 const BATCH_SIZE = 4096;
@@ -18,10 +15,12 @@ const els = {
   benchTable: document.querySelector("#bench-table"),
 };
 
-let wasm;
-let memoryView;
-let jsToRust;
-let rustToJs;
+let core;
+let abi;
+let view;
+let scratch;
+let jsToCpp;
+let cppToJs;
 let typeCounter;
 
 function makeTypeId(route, msgType) {
@@ -36,59 +35,69 @@ function msgType(typeId) {
   return typeId & 0xffff;
 }
 
-function memory() {
-  return wasm.memory;
-}
-
 function appendLog(line) {
   const time = new Date().toLocaleTimeString();
   els.log.textContent = `[${time}] ${line}\n${els.log.textContent}`;
 }
 
+function listenBus(path) {
+  core.setValue(scratch, 0, "i32");
+  const rc = abi.busListen(path, CAPACITY, scratch);
+  if (rc !== 0) throw new Error(`tachyon_bus_listen failed for ${path} (error ${rc})`);
+  const busPtr = core.getValue(scratch, "i32");
+  if (busPtr === 0) throw new Error(`tachyon_bus_listen returned null for ${path}`);
+  return busPtr;
+}
+
+// Two page-local rings: JS produces into jsToCpp, the C++ echo consumes it and
+// produces into cppToJs, then JS consumes the reply.
 function writeU32ToBus(bus, value, typeId) {
-  const ptr = bus.acquireTx(4);
-  memoryView.setUint32(ptr, value >>> 0, true);
-  bus.commitTx(4, typeId);
+  const ptr = abi.acquireTx(bus, 4);
+  if (ptr === 0) throw new Error("ring full");
+  view.setUint32(ptr, value >>> 0, true);
+  abi.commitTx(bus, 4, typeId);
+  abi.flush(bus);
 }
 
 function readU32FromBus(bus) {
-  if (!bus.acquireRx()) return null;
-  const ptr = bus.rxPtr();
-  const size = bus.rxSize();
-  const typeId = bus.rxTypeId();
-  const value = size === 4 ? memoryView.getUint32(ptr, true) : null;
-  bus.commitRx();
+  const ptr = abi.acquireRx(bus, scratch, scratch + 4);
+  if (ptr === 0) return null;
+  const typeId = core.getValue(scratch, "i32") >>> 0;
+  const size = core.getValue(scratch + 4, "i32") >>> 0;
+  const value = size === 4 ? view.getUint32(ptr, true) : null;
+  abi.commitRx(bus);
   return { value, size, typeId };
 }
 
-function pingRust(value) {
-  writeU32ToBus(jsToRust, value, typeCounter);
+function pingCpp(value) {
+  writeU32ToBus(jsToCpp, value, typeCounter);
 
-  if (!tachyon_browser_echo_once(jsToRust, rustToJs)) {
-    throw new Error("Rust WASM program did not receive the JS message");
+  if (abi.echoOnce(jsToCpp, cppToJs) !== 1) {
+    throw new Error("C++ WASM program did not receive the JS message");
   }
 
-  const reply = readU32FromBus(rustToJs);
+  const reply = readU32FromBus(cppToJs);
   if (!reply) {
-    throw new Error("JS did not receive the Rust WASM reply");
+    throw new Error("JS did not receive the C++ WASM reply");
   }
 
   return reply;
 }
 
-function pingRustFast(value) {
-  let ptr = jsToRust.acquireTx(4);
-  memoryView.setUint32(ptr, value >>> 0, true);
-  jsToRust.commitTx(4, typeCounter);
-  if (!tachyon_browser_echo_once(jsToRust, rustToJs)) {
-    throw new Error("Rust WASM program did not receive the JS message");
+function pingCppFast(value) {
+  const txPtr = abi.acquireTx(jsToCpp, 4);
+  view.setUint32(txPtr, value >>> 0, true);
+  abi.commitTx(jsToCpp, 4, typeCounter);
+  abi.flush(jsToCpp);
+  if (abi.echoOnce(jsToCpp, cppToJs) !== 1) {
+    throw new Error("C++ WASM program did not receive the JS message");
   }
-  if (!rustToJs.acquireRx()) {
-    throw new Error("JS did not receive the Rust WASM reply");
+  const rxPtr = abi.acquireRx(cppToJs, scratch, scratch + 4);
+  if (rxPtr === 0) {
+    throw new Error("JS did not receive the C++ WASM reply");
   }
-  ptr = rustToJs.rxPtr();
-  const replyValue = memoryView.getUint32(ptr, true);
-  rustToJs.commitRx();
+  const replyValue = view.getUint32(rxPtr, true);
+  abi.commitRx(cppToJs);
   return replyValue;
 }
 
@@ -131,7 +140,7 @@ async function runBench() {
   await new Promise((resolve) => requestAnimationFrame(resolve));
 
   for (let i = 0; i < warmup; i += 1) {
-    pingRust(i);
+    pingCpp(i);
   }
 
   const samples = [];
@@ -140,7 +149,7 @@ async function runBench() {
     const batchCount = Math.min(BATCH_SIZE, iterations - i);
     const batchStart = performance.now();
     for (let j = 0; j < batchCount; j += 1) {
-      pingRustFast(i + j);
+      pingCppFast(i + j);
     }
     samples.push(((performance.now() - batchStart) * 1_000_000) / batchCount);
   }
@@ -167,11 +176,23 @@ async function runBench() {
 }
 
 async function main() {
-  wasm = await init();
+  core = await createTachyonExample();
+  abi = {
+    busListen: core.cwrap("tachyon_bus_listen", "number", ["string", "number", "number"]),
+    acquireTx: core.cwrap("tachyon_acquire_tx", "number", ["number", "number"]),
+    commitTx: core.cwrap("tachyon_commit_tx", "number", ["number", "number", "number"]),
+    flush: core.cwrap("tachyon_flush", null, ["number"]),
+    acquireRx: core.cwrap("tachyon_acquire_rx", "number", ["number", "number", "number"]),
+    commitRx: core.cwrap("tachyon_commit_rx", "number", ["number"]),
+    echoOnce: core.cwrap("tachyon_browser_echo_once", "number", ["number", "number"]),
+  };
+  // 16-byte scratch for C out-parameters (out_bus / out_type_id / out_size).
+  scratch = core._malloc(16);
+
   typeCounter = makeTypeId(0, 7);
-  jsToRust = new WasmBus(CAPACITY);
-  rustToJs = new WasmBus(CAPACITY);
-  memoryView = new DataView(memory().buffer);
+  jsToCpp = listenBus("/example/js-to-cpp");
+  cppToJs = listenBus("/example/cpp-to-js");
+  view = new DataView(core.HEAPU8.buffer);
 
   els.status.textContent = "ready";
   els.capacity.textContent = `${CAPACITY / 1024} KiB x 2`;
@@ -180,10 +201,10 @@ async function main() {
 
   els.send.addEventListener("click", () => {
     const value = Number.parseInt(els.value.value, 10) >>> 0;
-    const reply = pingRust(value);
+    const reply = pingCpp(value);
     els.lastReply.textContent = `${reply.value}`;
     appendLog(
-      `JS sent ${value}, Rust replied ${reply.value}; route=${routeId(reply.typeId)} type=${msgType(
+      `JS sent ${value}, C++ replied ${reply.value}; route=${routeId(reply.typeId)} type=${msgType(
         reply.typeId,
       )}`,
     );
