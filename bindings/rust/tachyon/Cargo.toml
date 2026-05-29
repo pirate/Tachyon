@@ -7,14 +7,8 @@ license = "Apache-2.0"
 repository = "https://github.com/riyaneel/tachyon"
 readme = "README.md"
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[dependencies]
 tachyon-sys = { version = "0.5.1", path = "../tachyon-sys" }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
 
 [profile.release]
 opt-level = 3
