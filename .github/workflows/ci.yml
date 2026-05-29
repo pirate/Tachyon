@@ -381,12 +381,6 @@ jobs:
         run: cargo test
         working-directory: bindings/rust
 
-      - name: Check WASM target
-        run: |
-          rustup target add wasm32-unknown-unknown
-          cargo check -p tachyon-ipc --target wasm32-unknown-unknown
-        working-directory: bindings/rust
-
   rust_macos:
     name: Rust bindings (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
@@ -700,14 +694,15 @@ jobs:
       - name: Check Chromium
         run: /usr/bin/chromium --version
 
-      # - name: Browser WASM tests
-        # working-directory: bindings/js
-        # env:
-        # CHROMIUM_BIN: /usr/bin/chromium
-        # Do not run build:wasm in this test job. The generated WASM bindings are
-        # committed, and CI should validate the committed artifacts instead of
-        # regenerating them and potentially masking a stale generated-code diff.
-        # run: npm run test:browser
+      # Do not run build:wasm in this test job. The generated WASM module is
+      # committed, and CI validates the committed artifact (test:browser stages
+      # it into dist via build:ts) instead of regenerating it and potentially
+      # masking a stale generated-code diff.
+      - name: Browser WASM tests
+        working-directory: bindings/js
+        env:
+          CHROMIUM_BIN: /usr/bin/chromium
+        run: npm run test:browser
 
   nodejs_macos:
     name: Node.js bindings ${{ matrix.runner }} (Node ${{ matrix.node-version }})
