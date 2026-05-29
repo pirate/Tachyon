@@ -161,4 +161,5 @@ Testing/
 crash-
 .private/
 oss-fuzz/
-
+.emsdk/
+examples/browser_wasm/pkg/

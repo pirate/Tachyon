@@ -374,6 +374,67 @@ jobs:
         working-directory: bindings/node
         run: npm test
 
+  cpp_wasm:
+    name: C++ (Emscripten, ${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [ debug, release ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tachyon-env
+        with:
+          lang: 'cpp'
+
+      - name: Setup Emscripten
+        uses: ./.github/actions/setup-emsdk
+
+      - name: Configure
+        run: cmake --preset emscripten-${{ matrix.build_type }}
+
+      - name: Build
+        run: cmake --build --preset emscripten-${{ matrix.build_type }}
+
+      - name: Check WASM artefacts
+        run: |
+          ls -lh build/emscripten-${{ matrix.build_type }}/core/libtachyon.a
+          ls -lh build/emscripten-${{ matrix.build_type }}/core/tachyon.js
+          ls -lh build/emscripten-${{ matrix.build_type }}/core/tachyon.wasm
+
+  nodejs_browser_wasm:
+    name: Browser WASM tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'npm'
+          cache-dependency-path: bindings/node/package-lock.json
+
+      - name: Install dependencies
+        working-directory: bindings/node
+        run: npm install --ignore-scripts
+
+      - name: Check Chromium
+        run: /usr/bin/chromium --version
+
+      # Do not run build:wasm here. The generated WASM module is committed; CI
+      # validates the committed artifact (test:browser stages it into dist via
+      # build:ts) rather than regenerating it and masking a stale-artifact diff.
+      - name: Browser WASM tests
+        working-directory: bindings/node
+        env:
+          CHROMIUM_BIN: /usr/bin/chromium
+        run: npm run test:browser
+
   csharp:
     name: C# Bindings (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
