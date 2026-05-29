@@ -13,6 +13,7 @@ compiled from source at installation time via `cmake-js`.
 - [Requirements](#requirements)
 - [Install](#install)
 - [Quickstart](#quickstart)
+- [Browser WASM](#browser-wasm)
 - [API](#api)
 - [Zero-copy pattern](#zero-copy-pattern)
 - [Batch pattern](#batch-pattern)
@@ -48,6 +49,9 @@ Clang 17+ must be available on the build machine.
 
 The package ships as **ESM** (`"type": "module"`). CommonJS consumers must use dynamic `import()`.
 
+Browser bundlers that honor the package `browser` field resolve `@tachyon-ipc/core` to the WASM browser build. Node.js
+continues to resolve the native N-API entrypoint through the existing `main` and `types` fields.
+
 ## Quickstart
 
 The consumer must start first, it owns the UNIX socket and the SHM arena.
@@ -71,6 +75,46 @@ bus.send(Buffer.from('hello tachyon'), 1);
 
 `Bus` implements `Disposable`. The `using` keyword (TypeScript 5.2+, ES2023 Explicit Resource Management) guarantees
 `close()` is called on scope exit regardless of exceptions.
+
+## Browser WASM
+
+The browser build is shipped from the same npm package and keeps the same import and constructor shape:
+
+```typescript
+import {Bus} from '@tachyon-ipc/core';
+
+using consumer = Bus.listen('/page/demo', 1 << 20);
+using producer = Bus.connect('/page/demo');
+
+producer.send(new Uint8Array([1, 2, 3, 4]), 7);
+const {data, typeId} = consumer.recv();
+```
+
+The browser build runs the same C++ core compiled to WebAssembly with Emscripten, so the ring engine is identical to the
+native binding — there is no second implementation to keep in sync.
+
+Browsers do not expose POSIX shared memory or UNIX sockets, so `socketPath` is a page-local endpoint key rather than a
+filesystem socket. `listen()` creates the in-page WASM ring and `connect()` attaches to that ring. The message layout
+still uses Tachyon's 64-byte header, `type_id`, alignment, and skip-marker rules. Capacities are capped at 2GB because
+wasm32 pointers are 32-bit.
+
+The browser implementation is intentionally direct-doorbell oriented. After JavaScript commits a message, call the WASM
+work function immediately instead of scheduling a browser event or spinning in a poll loop. This avoids event-loop
+latency and keeps sub-microsecond round trips possible for in-page communication. Because the browser ring is
+non-blocking, `recv()` returns `null` when the ring is empty rather than throwing.
+
+Browser differences:
+
+- Repeated browser `connect()` calls return aliases to the same page-local ring; they are not independent subscribers,
+  and multiple consumers compete for the same ordered SPSC stream.
+- `recv()` and `acquireRx()` are non-blocking because the main browser thread cannot park like a native futex wait.
+- Browser `drainBatch()` preserves order but copies batch entries before returning, so ring slots are released
+  immediately; use `acquireRx()` for a direct WASM memory view.
+- `setNumaNode()` and `setPollingMode()` are no-ops in browsers.
+- `Buffer` is not a browser primitive; returned data is a `Uint8Array`.
+- Native cross-process IPC still requires Node.js or another native binding.
+- The browser build uses wasm32 for now, so WASM pointers, capacities, and slot sizes are `u32`-bounded; it can move to
+  wasm64/Memory64 later if a single linear-memory arena above 4 GiB becomes necessary.
 
 ## API
 
