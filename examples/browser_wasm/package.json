@@ -1,0 +1,13 @@
+{
+  "name": "tachyon-browser-wasm-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:wasm": "node build-wasm.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run build:wasm && vite build"
+  },
+  "devDependencies": {
+    "vite": "latest"
+  }
+}
