@@ -58,7 +58,9 @@ if (EMSCRIPTEN)
 	target_link_options(tachyon_wasm PRIVATE
 			"-sALLOW_MEMORY_GROWTH=1"
 			"-sMODULARIZE=1"
+			"-sEXPORT_ES6=1"
 			"-sEXPORT_NAME=TachyonCore"
+			"-sENVIRONMENT=web,worker"
 			"-sSTRICT=1"
 			"-sNO_EXIT_RUNTIME=1"
 			"-sWASM_BIGINT=1"
@@ -67,7 +69,7 @@ if (EMSCRIPTEN)
 			"--minify=0"
 			"--profiling-funcs"
 			"-sEXPORTED_FUNCTIONS=_malloc,_free"
-			"-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString"
+			"-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString,HEAPU8,HEAPU32"
 	)
 
 	set_target_properties(tachyon_wasm PROPERTIES
