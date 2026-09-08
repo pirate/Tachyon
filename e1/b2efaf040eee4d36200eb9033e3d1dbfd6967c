@@ -1,0 +1,89 @@
+.github/actions/setup-emsdk/action.yml
+  s_a90d1204e0ed5e::t_f3ae5ff3e80fec 7
+.github/workflows/ci.yml
+  s_a90d1204e0ed5e::t_ea4c6f9d7b9e05 351,354,358,362,366,370,374,420,423,429-437,439-457,460
+.github/workflows/release.yml
+  s_a90d1204e0ed5e::t_f51943bbaa33c2 332,336,351,357,395,400,404
+.gitignore
+  s_a90d1204e0ed5e::t_3f41ede477bb02 153
+bindings/CMakeLists.txt
+  s_a90d1204e0ed5e::t_05285e46d9ca98 21
+bindings/js/README.md
+  s_33c6c7a35bd0ca::t_e3ae8b80c0f736 84,90-91,100,114-117,123-139
+bindings/js/examples/README.md
+  s_a90d1204e0ed5e::t_3d3becf99fbf5f 12-14,24,30,52
+bindings/js/package.json
+  s_a90d1204e0ed5e::t_afa8a080b703c5 41-42,57-83
+bindings/js/scripts/copy-wasm.mjs
+  s_a90d1204e0ed5e::t_886f7901d4cba8 21
+bindings/js/scripts/stage-wasm.mjs
+  s_a90d1204e0ed5e::t_86a15dd9094831 12
+bindings/js/src/ts/batch.ts
+  s_a90d1204e0ed5e::t_755c313a1508cc 12,35
+bindings/js/src/ts/browser.ts
+  s_33c6c7a35bd0ca::t_51a81f52651d1a 1-7
+bindings/js/src/ts/browser_bindings.ts
+  s_a90d1204e0ed5e::t_3400660114035f 16-21,40-42,45-49,52-96,98-100,103-108,111-122,125-128,130-132,134-146,148-157,160-168,170-173,175-182,184-187,190-192,194-201,204-219,221-225,227-232,234-238,240-246,249-259,261-268,271-300,302-303,305-308,310-331,334-338,340-341,344-347
+bindings/js/src/ts/bus.ts
+  s_a90d1204e0ed5e::t_07ca48f52ba4c9 86,121
+bindings/js/src/ts/bus_core.ts
+  s_a90d1204e0ed5e::t_51694a1a5d4e87 9,15,21,24,102,140-142
+bindings/js/src/ts/guards.ts
+  s_a90d1204e0ed5e::t_78236280dccad2 16,19,23,52,65-66,75,88,99,138,159,183
+bindings/js/src/ts/wasm/tachyon.js
+  s_a90d1204e0ed5e::t_833ace2be4dd3c 5,7-8,30,32,36,114-121,151-179,247,266,279,281-282,285-286,313-315,348-351,440-441,580,583-598,604-605,638-651,654-658,706-709,742,745-794,807-808,812-815,817-821,836,838,847,861-862
+bindings/js/test/browser_wasm.spec.mjs
+  s_a90d1204e0ed5e::t_099cb49558b275 11-14,27-29,165-257,325,331-332,433-460
+bindings/js/test/package.spec.mjs
+  s_a90d1204e0ed5e::t_c47205daa7041f 1-75
+ci/release/bump_version.py
+  s_a90d1204e0ed5e::t_031900fd94f7fc 73
+ci/setup/install_emsdk.sh
+  s_a90d1204e0ed5e::t_6ed5bb7dd23823 5
+ci/vendor.sh
+  s_a90d1204e0ed5e::t_35ce78ccd38ca4 26
+core/CMakeLists.txt
+  s_a90d1204e0ed5e::t_95df7ab49077dc 60
+core/src/arena.cpp
+  s_a90d1204e0ed5e::t_4029a6e62eae22 260-262,264,316,318,326,394-397,411,416-419,450,479,481
+core/src/shm.cpp
+  s_a90d1204e0ed5e::t_525c38da178846 11,53-56
+core/src/tachyon_c.cpp
+  s_a90d1204e0ed5e::t_e8c08a8d1ed1a1 38,209-215,233-238,269
+examples/browser_wasm/README.md
+  s_33c6c7a35bd0ca::t_175f920bd6906f 4,25-27,36-38,43-44
+examples/browser_wasm/build-wasm.mjs
+  s_a90d1204e0ed5e::t_d10c3243f8c8ad 9,27,44
+examples/browser_wasm/main.js
+  s_a90d1204e0ed5e::t_971e07a3d97ab2 1,26-28,49-52,55-57,120,137,139-142,153,166-169,195-200
+examples/browser_wasm/package-lock.json
+  s_a90d1204e0ed5e::t_304b317e878438 1-856
+examples/browser_wasm/package.json
+  s_a90d1204e0ed5e::t_a4433784578459 12-14
+test/src/test_arena.cpp
+  s_33c6c7a35bd0ca::t_a41ac2be345643 2,45-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "e1b2efaf040eee4d36200eb9033e3d1dbfd6967c",
+  "prompts": {},
+  "sessions": {
+    "s_33c6c7a35bd0ca": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a061ab-263d-7860-b882-4955b6e0b240",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    },
+    "s_a90d1204e0ed5e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07fb4-134a-7340-b7d7-ca6b3b9ea8df",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    }
+  }
+}
