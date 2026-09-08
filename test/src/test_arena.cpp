@@ -1,4 +1,5 @@
 #include <cstring>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <thread>
@@ -39,6 +40,40 @@ namespace tachyon::core::test {
 
 		const auto consumer = Arena::attach(shm_owner->data());
 		ASSERT_TRUE(consumer.has_value());
+	}
+
+	TEST_F(ArenaTest, CounterWrapSingleAndBatch) {
+		ASSERT_TRUE(Arena::format(shm_owner->data(), arena_capacity).has_value());
+		auto *layout = reinterpret_cast<MemoryLayout *>(shm_owner->data().data());
+		// Exercise size_t rollover without allocating or sending SIZE_MAX bytes.
+		const size_t start = std::numeric_limits<size_t>::max() - 127;
+		layout->indices.head.store(start);
+		layout->indices.tail.store(start);
+		auto producer = Arena::attach(shm_owner->data()).value();
+		auto consumer = Arena::attach(shm_owner->data()).value();
+		for (uint32_t i = 0; i < 3; ++i) {
+			ASSERT_NE(producer.acquire_tx(1), nullptr);
+			ASSERT_TRUE(producer.commit_tx(1, i));
+		}
+		producer.flush();
+		uint32_t type_id = 99;
+		size_t	 size	 = 0;
+		ASSERT_NE(consumer.acquire_rx(type_id, size), nullptr);
+		EXPECT_EQ(type_id, 0U);
+		ASSERT_TRUE(consumer.commit_rx());
+		RxView views[2]{};
+		ASSERT_EQ(consumer.acquire_rx_batch(views, 2), 2U);
+		EXPECT_EQ(views[0].type_id, 1U);
+		EXPECT_EQ(views[1].type_id, 2U);
+		ASSERT_TRUE(consumer.commit_rx_batch(views, 2));
+		consumer.flush_rx();
+		EXPECT_EQ(consumer.acquire_rx(type_id, size), nullptr);
+		ASSERT_NE(producer.acquire_tx(1), nullptr);
+		ASSERT_TRUE(producer.commit_tx_rpc(1, 4, 123));
+		producer.flush();
+		uint64_t correlation = 0;
+		ASSERT_NE(consumer.acquire_rx_rpc(type_id, size, correlation), nullptr);
+		EXPECT_EQ(correlation, 123U);
 	}
 
 	TEST_F(ArenaTest, BasicLifecycle) {

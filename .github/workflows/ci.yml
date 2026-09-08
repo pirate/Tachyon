@@ -348,30 +348,30 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-          cache-dependency-path: bindings/node/package-lock.json
+          cache-dependency-path: bindings/js/package-lock.json
 
       - name: Install dependencies & build native library
-        working-directory: bindings/node
+        working-directory: bindings/js
         run: npm install && npm run build:native
 
       - name: Type check
-        working-directory: bindings/node
+        working-directory: bindings/js
         run: npx tsc --noEmit
 
       - name: Format check
-        working-directory: bindings/node
+        working-directory: bindings/js
         run: npm run format:check
 
       - name: Lint check
-        working-directory: bindings/node
+        working-directory: bindings/js
         run: npm run lint
 
       - name: Build TypeScript
-        working-directory: bindings/node
+        working-directory: bindings/js
         run: npm run build:ts
 
       - name: Tests
-        working-directory: bindings/node
+        working-directory: bindings/js
         run: npm test
 
   cpp_wasm:
@@ -417,22 +417,47 @@ jobs:
         with:
           node-version: 24
           cache: 'npm'
-          cache-dependency-path: bindings/node/package-lock.json
+          cache-dependency-path: bindings/js/package-lock.json
 
       - name: Install dependencies
-        working-directory: bindings/node
+        working-directory: bindings/js
         run: npm install --ignore-scripts
 
       - name: Check Chromium
         run: /usr/bin/chromium --version
 
-      # Do not run build:wasm here. The generated WASM module is committed; CI
-      # validates the committed artifact (test:browser stages it into dist via
-      # build:ts) rather than regenerating it and masking a stale-artifact diff.
+      - name: Setup Emscripten
+        uses: ./.github/actions/setup-emsdk
+
+      - name: Rebuild and verify shipped WASM artifacts
+        working-directory: bindings/js
+        run: |
+          npm run build:wasm
+          git diff --exit-code -- src/ts/wasm/tachyon.js src/ts/wasm/tachyon.wasm
+
       - name: Browser WASM tests
-        working-directory: bindings/node
+        working-directory: bindings/js
         env:
           CHROMIUM_BIN: /usr/bin/chromium
+        run: npm run test:browser
+
+      - name: Packed browser package and type declarations
+        working-directory: bindings/js
+        env:
+          CHROMIUM_BIN: /usr/bin/chromium
+        run: npm run test:package
+
+      - name: Build C++ browser demo
+        working-directory: examples/browser_wasm
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Browser demo integration
+        working-directory: bindings/js
+        env:
+          CHROMIUM_BIN: /usr/bin/chromium
+          TACHYON_BROWSER_DEMO: '1'
         run: npm run test:browser
 
   csharp:

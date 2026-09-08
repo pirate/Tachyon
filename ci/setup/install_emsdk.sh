@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-EMSDK_VERSION="${1:-latest}"
+EMSDK_VERSION="${1:-4.0.10}"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EMSDK_DIR="${PROJECT_ROOT}/.emsdk"
 

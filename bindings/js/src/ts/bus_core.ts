@@ -6,22 +6,22 @@ import { RxGuard, TxGuard } from './guards.ts';
 
 const TACHYON_STATE_FATAL_ERROR = 4;
 
-export interface RawRx<T extends Uint8Array = Buffer> {
+export interface RawRx<T extends Uint8Array = Uint8Array> {
 	readonly data: T;
 	readonly typeId: number;
 	readonly actualSize: number;
 }
 
-export interface RawBatchMessage<T extends Uint8Array = Buffer> {
+export interface RawBatchMessage<T extends Uint8Array = Uint8Array> {
 	readonly data: T;
 	readonly typeId: number;
 	readonly size: number;
 }
 
-export interface BusHandle<T extends Uint8Array = Buffer> {
+export interface BusHandle<T extends Uint8Array = Uint8Array> {
 	close(): void;
 
-	send(data: Buffer | Uint8Array, typeId?: number): void;
+	send(data: Uint8Array, typeId?: number): void;
 
 	acquireTx(maxSize: number): T;
 
@@ -99,7 +99,7 @@ export abstract class BusBase<T extends Uint8Array> implements Disposable {
 	}
 
 	/** Copies `data` into the ring buffer, commits, and flushes. */
-	public send(data: Buffer | Uint8Array, typeId = 0): void {
+	public send(data: Uint8Array, typeId = 0): void {
 		this.#assertOpen();
 		this.#handle.send(data, typeId);
 	}
@@ -137,6 +137,9 @@ export abstract class BusBase<T extends Uint8Array> implements Disposable {
 		this.#assertOpen();
 		const buf = this.#handle.acquireTx(maxSize);
 		const ctrl: TxController = {
+			assertOpen: () => {
+				this.#assertOpen();
+			},
 			commitTx: (s, t) => {
 				this.#handle.commitTx(s, t);
 			},

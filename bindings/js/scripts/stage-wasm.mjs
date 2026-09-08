@@ -9,7 +9,7 @@ const DIST_DIR = resolve('dist/wasm');
 
 async function main() {
 	await mkdir(DIST_DIR, { recursive: true });
-	for (const file of ['tachyon.js', 'tachyon.wasm']) {
+	for (const file of ['tachyon.js', 'tachyon.wasm', 'tachyon.d.ts']) {
 		await copyFile(resolve(SRC_DIR, file), resolve(DIST_DIR, file));
 	}
 	console.log('WASM artefacts staged into dist/wasm');

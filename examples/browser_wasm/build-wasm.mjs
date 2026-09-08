@@ -6,7 +6,7 @@
 // Requires the Emscripten SDK on PATH (`source .emsdk/emsdk_env.sh`).
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,7 +24,7 @@ function run(cmd, args, opts = {}) {
 }
 
 // 1. Build the core static library with the Emscripten toolchain (cached by CMake).
-if (!existsSync(CORE_LIB)) {
+{
 	run('cmake', ['--preset', 'emscripten-release'], { cwd: REPO_ROOT });
 	run('cmake', ['--build', '--preset', 'emscripten-release'], { cwd: REPO_ROOT });
 }
@@ -41,6 +41,7 @@ run('em++', [
 	CORE_LIB,
 	'-Wl,--no-whole-archive',
 	'-sALLOW_MEMORY_GROWTH=1',
+	'-sABORTING_MALLOC=0',
 	'-sMODULARIZE=1',
 	'-sEXPORT_ES6=1',
 	'-sEXPORT_NAME=TachyonExample',

@@ -35,7 +35,7 @@ tachyon_bus_listen(const char *socket_path, const size_t capacity, tachyon_bus_t
 		return TACHYON_ERR_INVALID_SZ;
 
 #if defined(__EMSCRIPTEN__)
-	if (capacity > static_cast<size_t>(INT32_MAX)) [[unlikely]] {
+	if (capacity > static_cast<size_t>(INT32_MAX) || (capacity & (capacity - 1)) != 0) [[unlikely]] {
 		return TACHYON_ERR_INVALID_SZ;
 	}
 #endif // #if defined(__EMSCRIPTEN__)
@@ -206,7 +206,13 @@ tachyon_error_t tachyon_commit_rx(tachyon_bus_t *bus) TACHYON_NOEXCEPT {
 	if (!bus) [[unlikely]]
 		return TACHYON_ERR_NULL_PTR;
 
-	return bus->arena.commit_rx() ? TACHYON_SUCCESS : TACHYON_ERR_SYSTEM;
+	const bool committed = bus->arena.commit_rx();
+#if defined(__EMSCRIPTEN__)
+	// Page-local producers cannot wait for a sleeping consumer to publish its
+	// tail. Release even small rings immediately without flushing pending TX.
+	bus->arena.flush_rx();
+#endif
+	return committed ? TACHYON_SUCCESS : TACHYON_ERR_SYSTEM;
 }
 
 size_t
@@ -224,8 +230,12 @@ size_t tachyon_drain_batch(
 	if (!bus || !out_views || max_msgs == 0) [[unlikely]]
 		return 0;
 
-	auto	*cxx_views = reinterpret_cast<RxView *>(out_views);
-	uint32_t spins	   = 0;
+	auto *cxx_views = reinterpret_cast<RxView *>(out_views);
+#if defined(__EMSCRIPTEN__)
+	(void)spin_threshold;
+	return bus->arena.acquire_rx_batch(cxx_views, max_msgs);
+#else
+	uint32_t spins = 0;
 
 	while (true) {
 		size_t count = bus->arena.acquire_rx_batch(cxx_views, max_msgs);
@@ -256,6 +266,7 @@ size_t tachyon_drain_batch(
 			spins = 0;
 		}
 	}
+#endif
 }
 
 tachyon_error_t

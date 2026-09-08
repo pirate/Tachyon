@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "vite": "latest"
+  },
+  "dependencies": {
+    "@tachyon-ipc/core": "file:../../bindings/js"
   }
 }

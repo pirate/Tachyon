@@ -4,7 +4,7 @@ inputs:
   version:
     description: Emscripten Version
     required: false
-    default: 'latest'
+    default: '4.0.10'
 runs:
   using: composite
   steps:

@@ -8,6 +8,7 @@
 
 #if defined(__EMSCRIPTEN__)
 #include <cstdlib>
+#include <tachyon/arena.hpp>
 #endif // #if defined(__EMSCRIPTEN__)
 
 #include <tachyon/shm.hpp>
@@ -49,7 +50,10 @@ namespace tachyon::core {
 			return std::unexpected(ShmError::InvalidSize);
 		}
 
-		void *ptr = std::aligned_alloc(64, size);
+		// MemoryLayout is over-aligned (128 bytes), beyond malloc's guarantee.
+		constexpr size_t alignment		 = alignof(MemoryLayout);
+		const size_t	 allocation_size = (size + alignment - 1) & ~(alignment - 1);
+		void			*ptr			 = std::aligned_alloc(alignment, allocation_size);
 		if (!ptr) [[unlikely]] {
 			return std::unexpected(ShmError::MapFailed);
 		}

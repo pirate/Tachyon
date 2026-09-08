@@ -8,7 +8,10 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PACKAGE_ROOT = resolve(__dirname, '..');
+const DEMO = process.env.TACHYON_BROWSER_DEMO === '1';
+const PACKAGE_ROOT = DEMO
+	? resolve(__dirname, '../../../examples/browser_wasm/dist')
+	: resolve(process.env.TACHYON_PACKAGE_ROOT ?? resolve(__dirname, '..'));
 const HOME = process.env.HOME ?? '';
 
 const TEST_PAGE = `<!doctype html>
@@ -21,7 +24,9 @@ const TEST_PAGE = `<!doctype html>
 }
 </script>
 <script type="module">
-import { Bus, makeTypeId, msgType, routeId } from "@tachyon-ipc/core";
+import { Bus, makeTypeId, msgType, routeId, createBrowserBindings } from "@tachyon-ipc/core";
+import createTachyonCore from "/dist/wasm/tachyon.js";
+const raw = await createTachyonCore();
 
 const results = [];
 const assert = {
@@ -157,6 +162,99 @@ record("drainBatch returns ordered messages", () => {
   consumer.close();
 });
 
+record("empty receive and wasm32 argument validation", () => {
+  const bus = Bus.listen("/browser/validation", 256);
+  assert.equal(bus.recv(), null);
+  for (const value of [-1, 1.5, NaN, Infinity, 2 ** 32, 2 ** 53]) {
+    assert.throws(() => bus.acquireTx(value), /integer/);
+    assert.throws(() => bus.drainBatch(value), /integer/);
+    assert.throws(() => Bus.listen("/browser/invalid", value), /capacity|limit/);
+  }
+  assert.throws(() => Bus.listen("/browser/invalid", 2 ** 31), /limit/);
+  const tx = bus.acquireTx(4);
+  assert.throws(() => tx.commit(5, 1), /actualSize/);
+  assert.throws(() => tx.commit(4, -1), /typeId/);
+  tx.bytes().set([1, 2, 3, 4]);
+  tx.commit(4, 0xffffffff);
+  assert.equal(bus.recv().typeId, 0xffffffff);
+  for (let i = 0; i < 100; i++) {
+    bus.send(new Uint8Array([i]), i);
+    assert.equal(bus.recv().data[0], i);
+  }
+  bus.close();
+});
+
+record("guards are exclusive across peers and close releases reservations", () => {
+  const bus = Bus.listen("/browser/exclusive", 1024);
+  const peer = Bus.connect("/browser/exclusive");
+  const tx = peer.acquireTx(4);
+  assert.throws(() => bus.acquireTx(4), /already active/);
+  peer.close();
+  assert.throws(() => tx.bytes(), /closed/);
+  assert.throws(() => tx.commit(4, 1), /active|closed/);
+  bus.send(new Uint8Array([7]), 1);
+  const rx = bus.acquireRx();
+  assert.throws(() => bus.recv(), /already active/);
+  rx.commit();
+  rx[Symbol.dispose]();
+  bus.close();
+});
+
+record("overlapping batches cannot invalidate each other's buffers", () => {
+  const bus = Bus.listen("/browser/batch-lifetime", 1024);
+  bus.send(new Uint8Array([1]), 1);
+  const first = bus.drainBatch(1);
+  const saved = first.at(0).data;
+  assert.throws(() => bus.drainBatch(1), /already active/);
+  first.commit();
+  assert.equal(saved.byteLength, 0);
+  bus.send(new Uint8Array([2]), 2);
+  const second = bus.drainBatch(1);
+  const savedSecond = second.at(0).data;
+  bus.close();
+  assert.equal(savedSecond.byteLength, 0);
+  second.commit();
+});
+
+record("ring counters survive more than 4 GiB of cumulative wasm32 traffic", () => {
+  const bus = Bus.listen("/browser/wrap", 1 << 20);
+  for (let i = 0; i < 32770; i++) {
+    const tx = bus.acquireTx(131008);
+    tx.bytes()[0] = i & 255;
+    tx.commit(1, i);
+    const rx = bus.acquireRx();
+    assert.notEqual(rx, null);
+    assert.equal(rx.typeId, i);
+    assert.equal(rx.data()[0], i & 255);
+    rx.commit();
+  }
+  bus.close();
+});
+
+record("custom modules share the wrapper and raw C ABI", () => {
+  const custom = createBrowserBindings(raw);
+  assert.equal(createBrowserBindings(raw), custom);
+  const bus = custom.Bus.listen("/browser/custom", 1024);
+  const cells = raw._malloc(64);
+  const shm = raw.cwrap("tachyon_bus_get_shm_ptr", "number", ["number"])(bus.wasmPointer);
+  assert.equal(shm % 128, 0);
+  const receive = raw.cwrap("tachyon_acquire_rx_blocking", "number", ["number", "number", "number", "number"]);
+  const drain = raw.cwrap("tachyon_drain_batch", "number", ["number", "number", "number", "number"]);
+  assert.equal(receive(bus.wasmPointer, cells, cells + 4, 0), 0);
+  assert.equal(drain(bus.wasmPointer, cells, 1, 0), 0);
+  const spin = raw.cwrap("tachyon_acquire_rx_spin", "number", ["number", "number", "number", "number"]);
+  assert.equal(spin(bus.wasmPointer, cells, cells + 4, 0), 0);
+  bus.send(new Uint8Array([42]), 123);
+  const ptr = receive(bus.wasmPointer, cells, cells + 4, 0);
+  assert.equal(raw.HEAPU8[ptr], 42);
+  assert.equal(raw.getValue(cells, "i32"), 123);
+  raw.cwrap("tachyon_commit_rx", "number", ["number"])(bus.wasmPointer);
+  assert.equal(bus.recv(), null);
+  bus.close();
+  assert.throws(() => bus.wasmPointer, /closed/);
+  raw._free(cells);
+});
+
 window.__tachyonBrowserResults = results;
 window.__tachyonBrowserDone = true;
 </script>`;
@@ -224,14 +322,14 @@ async function startServer() {
 	const server = createServer(async (req, res) => {
 		try {
 			const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-			if (url.pathname === '/' || url.pathname === '/index.html') {
+			if (!DEMO && (url.pathname === '/' || url.pathname === '/index.html')) {
 				res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
 				res.end(TEST_PAGE);
 				return;
 			}
 
-			const filePath = resolve(PACKAGE_ROOT, `.${url.pathname}`);
-			if (!filePath.startsWith(PACKAGE_ROOT)) {
+			const filePath = resolve(PACKAGE_ROOT, `.${url.pathname === '/' ? '/index.html' : url.pathname}`);
+			if (!filePath.startsWith(PACKAGE_ROOT + '/')) {
 				res.writeHead(403);
 				res.end('forbidden');
 				return;
@@ -332,6 +430,34 @@ async function runCdp(webSocketDebuggerUrl) {
 
 	await call('Runtime.enable');
 	await evaluateResilient('document.readyState', 5_000);
+	if (DEMO) {
+		await evaluateResilient(`new Promise((resolve, reject) => {
+			const started = performance.now();
+			const check = () => {
+				if (document.querySelector('#wasm-status')?.textContent === 'ready') resolve(true);
+				else if (performance.now() - started > 10000) reject(new Error(document.body.innerText));
+				else setTimeout(check, 25);
+			}; check();
+		})`);
+		await evaluateResilient(`(() => {
+			document.querySelector('#value').value = '41';
+			document.querySelector('#send').click();
+			if (document.querySelector('#last-reply').textContent !== '42') throw new Error('C++ echo failed');
+			document.querySelector('#bench').click();
+		})()`);
+		await evaluateResilient(`new Promise((resolve, reject) => {
+			const started = performance.now();
+			const check = () => {
+				const log = document.querySelector('#log').textContent;
+				if (log.includes('bench failed')) reject(new Error(log));
+				else if (log.includes('bench completed')) resolve(true);
+				else if (performance.now() - started > 10000) reject(new Error('Demo benchmark timed out'));
+				else setTimeout(check, 25);
+			}; check();
+		})`);
+		ws.close();
+		return [{ name: 'built demo wrapper echo and million-RTT C ABI benchmark', ok: true }];
+	}
 	await evaluateResilient(`new Promise((resolve, reject) => {
   const started = performance.now();
   const tick = () => {

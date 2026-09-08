@@ -9,7 +9,7 @@ export interface BatchController {
 }
 
 /** A single message inside an {@link RxBatch}. Valid only until the batch is committed. */
-export interface RxMessage<S extends Uint8Array = Buffer> {
+export interface RxMessage<S extends Uint8Array = Uint8Array> {
 	readonly data: RxSlot<S>;
 	readonly typeId: number;
 	readonly size: number;
@@ -32,7 +32,7 @@ export interface RxMessage<S extends Uint8Array = Buffer> {
  * }
  * ```
  */
-export class RxBatch<S extends Uint8Array = Buffer> {
+export class RxBatch<S extends Uint8Array = Uint8Array> {
 	#ctrl: BatchController;
 	#messages: RxMessage<S>[];
 	#done = false;

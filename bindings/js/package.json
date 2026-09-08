@@ -38,7 +38,8 @@
 		"prebuild": "cmake-js compile --runtime node --runtime-version $(node -v | cut -c2-)",
 		"test": "mocha",
 		"pretest:browser": "npm run build:ts",
-		"test:browser": "node test/browser_wasm.spec.mjs"
+		"test:browser": "node test/browser_wasm.spec.mjs",
+		"test:package": "npm run build:ts && node test/package.spec.mjs"
 	},
 	"dependencies": {
 		"node-addon-api": "^8.7.0"
@@ -53,5 +54,31 @@
 		"tsx": "^4.21.0",
 		"typescript": "^6.0.2",
 		"typescript-eslint": "^8.58.1"
-	}
+	},
+	"exports": {
+		".": {
+			"browser": {
+				"types": "./dist/browser.d.ts",
+				"default": "./dist/browser.js"
+			},
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./browser": {
+			"types": "./dist/browser.d.ts",
+			"default": "./dist/browser.js"
+		},
+		"./browser/bindings": {
+			"types": "./dist/browser_bindings.d.ts",
+			"default": "./dist/browser_bindings.js"
+		}
+	},
+	"files": [
+		"dist",
+		"src/native",
+		"CMakeLists.txt",
+		"README.md",
+		"LICENSE",
+		"prebuilds"
+	]
 }

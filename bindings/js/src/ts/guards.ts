@@ -13,13 +13,14 @@ declare const rxSlotBrand: unique symbol;
  * browser WASM transport exposes a plain `Uint8Array`. The window is never cast across
  * those shapes, so browser code can never call a Node-only `Buffer` method on it.
  */
-export type TxSlot<S extends Uint8Array = Buffer> = S & { readonly [txSlotBrand]: true };
+export type TxSlot<S extends Uint8Array = Uint8Array> = S & { readonly [txSlotBrand]: true };
 
 /** Zero-copy read window into the ring buffer. Valid only until commit. */
-export type RxSlot<S extends Uint8Array = Buffer> = S & { readonly [rxSlotBrand]: true };
+export type RxSlot<S extends Uint8Array = Uint8Array> = S & { readonly [rxSlotBrand]: true };
 
 /** @internal */
 export interface TxController {
+	assertOpen?(): void;
 	commitTx(actualSize: number, typeId: number): void;
 
 	commitTxUnflushed(actualSize: number, typeId: number): void;
@@ -48,7 +49,7 @@ export interface RxController {
  * tx.commit(5, 1);
  * ```
  */
-export class TxGuard<S extends Uint8Array = Buffer> {
+export class TxGuard<S extends Uint8Array = Uint8Array> {
 	#ctrl: TxController;
 	#buffer: TxSlot<S> | null;
 	#done = false;
@@ -61,8 +62,8 @@ export class TxGuard<S extends Uint8Array = Buffer> {
 
 	/**
 	 * Returns the writable zero-copy window into shared memory.
-	 * The reference is invalidated on commit or rollback, any cached reference
-	 * will throw `TypeError` on subsequent access (underlying ArrayBuffer detached).
+	 * The reference is invalidated on commit or rollback, cached browser views must not be used afterward. WASM memory cannot
+	 * detach individual slots, and memory growth can detach earlier views.
 	 *
 	 * @throws {Error} If the slot has already been finalized.
 	 */
@@ -71,6 +72,7 @@ export class TxGuard<S extends Uint8Array = Buffer> {
 			throw new Error('TxGuard: slot has already been committed or rolled back.');
 		}
 
+		this.#ctrl.assertOpen?.();
 		return this.#buffer;
 	}
 
@@ -82,8 +84,8 @@ export class TxGuard<S extends Uint8Array = Buffer> {
 	 */
 	public commit(actualSize: number, typeId: number): void {
 		this.#assertOpen();
-		this.#invalidate();
 		this.#ctrl.commitTx(actualSize, typeId);
+		this.#invalidate();
 	}
 
 	/**
@@ -93,8 +95,8 @@ export class TxGuard<S extends Uint8Array = Buffer> {
 	 */
 	public commitUnflushed(actualSize: number, typeId: number): void {
 		this.#assertOpen();
-		this.#invalidate();
 		this.#ctrl.commitTxUnflushed(actualSize, typeId);
+		this.#invalidate();
 	}
 
 	/** Cancels the transaction without publishing. No-op if already finalized. */
@@ -133,7 +135,7 @@ export class TxGuard<S extends Uint8Array = Buffer> {
  * process(rx.data());
  * ```
  */
-export class RxGuard<S extends Uint8Array = Buffer> {
+export class RxGuard<S extends Uint8Array = Uint8Array> {
 	#ctrl: RxController;
 	#buffer: RxSlot<S> | null;
 	#done = false;
@@ -154,7 +156,7 @@ export class RxGuard<S extends Uint8Array = Buffer> {
 
 	/**
 	 * Returns the read-only zero-copy window into shared memory.
-	 * The reference is invalidated on commit, any cached reference will throw `TypeError`.
+	 * The reference is invalidated on commit, cached browser views must not be used afterward.
 	 *
 	 * @throws {Error} If the slot has already been committed.
 	 * @throws {PeerDeadError} If the bus has transitioned to TACHYON_STATE_FATAL_ERROR.
@@ -178,7 +180,7 @@ export class RxGuard<S extends Uint8Array = Buffer> {
 
 	/** Called automatically by the `using` keyword. Commits if not already released. */
 	public [Symbol.dispose](): void {
-		this.commit();
+		if (!this.#done) this.commit();
 	}
 
 	#assertOpen(): void {

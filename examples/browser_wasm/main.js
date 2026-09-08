@@ -1,3 +1,4 @@
+import { createBrowserBindings } from "@tachyon-ipc/core/browser/bindings";
 import createTachyonExample from "./pkg/tachyon_example.js";
 
 const CAPACITY = 1 << 20;
@@ -22,6 +23,9 @@ let scratch;
 let jsToCpp;
 let cppToJs;
 let typeCounter;
+let BrowserBus;
+let jsBus;
+let cppBus;
 
 function makeTypeId(route, msgType) {
   return ((route & 0xffff) << 16) | (msgType & 0xffff);
@@ -40,48 +44,17 @@ function appendLog(line) {
   els.log.textContent = `[${time}] ${line}\n${els.log.textContent}`;
 }
 
-function listenBus(path) {
-  core.setValue(scratch, 0, "i32");
-  const rc = abi.busListen(path, CAPACITY, scratch);
-  if (rc !== 0) throw new Error(`tachyon_bus_listen failed for ${path} (error ${rc})`);
-  const busPtr = core.getValue(scratch, "i32");
-  if (busPtr === 0) throw new Error(`tachyon_bus_listen returned null for ${path}`);
-  return busPtr;
-}
-
-// Two page-local rings: JS produces into jsToCpp, the C++ echo consumes it and
-// produces into cppToJs, then JS consumes the reply.
-function writeU32ToBus(bus, value, typeId) {
-  const ptr = abi.acquireTx(bus, 4);
-  if (ptr === 0) throw new Error("ring full");
-  view.setUint32(ptr, value >>> 0, true);
-  abi.commitTx(bus, 4, typeId);
-  abi.flush(bus);
-}
-
-function readU32FromBus(bus) {
-  const ptr = abi.acquireRx(bus, scratch, scratch + 4);
-  if (ptr === 0) return null;
-  const typeId = core.getValue(scratch, "i32") >>> 0;
-  const size = core.getValue(scratch + 4, "i32") >>> 0;
-  const value = size === 4 ? view.getUint32(ptr, true) : null;
-  abi.commitRx(bus);
-  return { value, size, typeId };
-}
 
 function pingCpp(value) {
-  writeU32ToBus(jsToCpp, value, typeCounter);
-
-  if (abi.echoOnce(jsToCpp, cppToJs) !== 1) {
+  const payload = new Uint8Array(4);
+  new DataView(payload.buffer).setUint32(0, value >>> 0, true);
+  jsBus.send(payload, typeCounter);
+  if (abi.echoOnce(jsBus.wasmPointer, cppBus.wasmPointer) !== 1) {
     throw new Error("C++ WASM program did not receive the JS message");
   }
-
-  const reply = readU32FromBus(cppToJs);
-  if (!reply) {
-    throw new Error("JS did not receive the C++ WASM reply");
-  }
-
-  return reply;
+  const reply = cppBus.recv();
+  if (!reply || reply.data.length !== 4) throw new Error("Invalid C++ reply");
+  return { value: new DataView(reply.data.buffer).getUint32(0, true), size: 4, typeId: reply.typeId };
 }
 
 function pingCppFast(value) {
@@ -144,7 +117,7 @@ async function runBench() {
   }
 
   const samples = [];
-  let totalStart = performance.now();
+  const totalStart = performance.now();
   for (let i = 0; i < iterations; i += BATCH_SIZE) {
     const batchCount = Math.min(BATCH_SIZE, iterations - i);
     const batchStart = performance.now();
@@ -161,12 +134,12 @@ async function runBench() {
     ["Payload", "4 bytes u32"],
     [
       "Samples",
-      `${samples.length.toLocaleString()} batch averages x ${BATCH_SIZE}`,
+      `${samples.length.toLocaleString()} batch averages, up to ${BATCH_SIZE} RTTs each`,
     ],
-    ["Direct doorbell p50", formatNs(percentile(samples, 0.5))],
-    ["Direct doorbell p90", formatNs(percentile(samples, 0.9))],
-    ["Direct doorbell p99", formatNs(percentile(samples, 0.99))],
-    ["Direct doorbell mean", formatNs((totalMs * 1_000_000) / iterations)],
+    ["C ABI doorbell p50", formatNs(percentile(samples, 0.5))],
+    ["C ABI doorbell p90", formatNs(percentile(samples, 0.9))],
+    ["C ABI doorbell p99", formatNs(percentile(samples, 0.99))],
+    ["C ABI doorbell mean", formatNs((totalMs * 1_000_000) / iterations)],
     ["Throughput", `${(throughput / 1000).toFixed(1)} K RTT/sec`],
   ]);
   appendLog(
@@ -177,8 +150,8 @@ async function runBench() {
 
 async function main() {
   core = await createTachyonExample();
+  BrowserBus = createBrowserBindings(core).Bus;
   abi = {
-    busListen: core.cwrap("tachyon_bus_listen", "number", ["string", "number", "number"]),
     acquireTx: core.cwrap("tachyon_acquire_tx", "number", ["number", "number"]),
     commitTx: core.cwrap("tachyon_commit_tx", "number", ["number", "number", "number"]),
     flush: core.cwrap("tachyon_flush", null, ["number"]),
@@ -190,8 +163,10 @@ async function main() {
   scratch = core._malloc(16);
 
   typeCounter = makeTypeId(0, 7);
-  jsToCpp = listenBus("/example/js-to-cpp");
-  cppToJs = listenBus("/example/cpp-to-js");
+  jsBus = BrowserBus.listen("/example/js-to-cpp", CAPACITY);
+  cppBus = BrowserBus.listen("/example/cpp-to-js", CAPACITY);
+  jsToCpp = jsBus.wasmPointer;
+  cppToJs = cppBus.wasmPointer;
   view = new DataView(core.HEAPU8.buffer);
 
   els.status.textContent = "ready";
@@ -217,6 +192,12 @@ async function main() {
     });
   });
 
+  window.addEventListener("pagehide", (event) => {
+    if (event.persisted) return;
+    jsBus.close();
+    cppBus.close();
+    core._free(scratch);
+  });
   appendLog("WASM module initialized");
 }
 

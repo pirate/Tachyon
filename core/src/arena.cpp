@@ -257,9 +257,11 @@ namespace tachyon::core {
 	}
 
 	const std::byte *Arena::acquire_rx(uint32_t &out_type_id, size_t &out_actual_size) noexcept {
-		if (cached_head_ <= local_tail_) {
+		// Unsigned indices wrap on wasm32 after 4 GiB of traffic. Only equality
+		// denotes an empty ring; ordering comparisons fail across that wrap.
+		if (cached_head_ == local_tail_) {
 			cached_head_ = layout_->indices.head.load(std::memory_order_acquire);
-			if (cached_head_ <= local_tail_) [[likely]]
+			if (cached_head_ == local_tail_) [[likely]]
 				return nullptr;
 		}
 
@@ -311,9 +313,9 @@ namespace tachyon::core {
 			return 0;
 
 		size_t current_tail = local_tail_;
-		if (cached_head_ <= current_tail) {
+		if (cached_head_ == current_tail) {
 			cached_head_ = layout_->indices.head.load(std::memory_order_acquire);
-			if (cached_head_ <= current_tail) [[likely]] {
+			if (cached_head_ == current_tail) [[likely]] {
 				return 0;
 			}
 		}
@@ -321,7 +323,7 @@ namespace tachyon::core {
 		size_t		 count	  = 0;
 		const size_t capacity = capacity_mask_ + 1;
 
-		while (count < max_msgs && current_tail < cached_head_) {
+		while (count < max_msgs && current_tail != cached_head_) {
 			size_t physical_idx = current_tail & capacity_mask_;
 			if (capacity - physical_idx < sizeof(PackedMeta)) [[unlikely]] {
 				layout_->header.state.store(BusState::FatalError, std::memory_order_relaxed);
@@ -389,6 +391,10 @@ namespace tachyon::core {
 
 	const std::byte *
 	Arena::acquire_rx_spin(uint32_t &out_type_id, size_t &out_actual_size, const uint32_t max_spins) noexcept {
+#if defined(__EMSCRIPTEN__)
+		(void)max_spins;
+		return acquire_rx(out_type_id, out_actual_size);
+#else
 		uint32_t		 spins = 0;
 		const std::byte *ptr   = nullptr;
 
@@ -402,10 +408,15 @@ namespace tachyon::core {
 			spins++;
 		}
 		return ptr;
+#endif
 	}
 
 	const std::byte *
 	Arena::acquire_rx_blocking(uint32_t &out_type_id, size_t &out_actual_size, const uint32_t spin_threshold) noexcept {
+#if defined(__EMSCRIPTEN__)
+		(void)spin_threshold;
+		return acquire_rx(out_type_id, out_actual_size);
+#else
 		uint32_t		 spins = 0;
 		const std::byte *ptr   = nullptr;
 
@@ -436,6 +447,7 @@ namespace tachyon::core {
 		}
 
 		return ptr;
+#endif
 	}
 
 	bool
@@ -464,9 +476,9 @@ namespace tachyon::core {
 
 	const std::byte *
 	Arena::acquire_rx_rpc(uint32_t &out_type_id, size_t &out_actual_size, uint64_t &out_correlation_id) noexcept {
-		if (cached_head_ <= local_tail_) {
+		if (cached_head_ == local_tail_) {
 			cached_head_ = layout_->indices.head.load(std::memory_order_acquire);
-			if (cached_head_ <= local_tail_) [[likely]]
+			if (cached_head_ == local_tail_) [[likely]]
 				return nullptr;
 		}
 

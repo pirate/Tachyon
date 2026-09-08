@@ -83,7 +83,7 @@ function loadNative(): NativeModule {
 
 const native = loadNative();
 
-class NativeBusHandle implements BusHandle {
+class NativeBusHandle implements BusHandle<Buffer> {
 	#handle: NativeBinding;
 
 	public constructor(handle: NativeBinding) {
@@ -118,7 +118,7 @@ class NativeBusHandle implements BusHandle {
 		this.#handle.flush();
 	}
 
-	public acquireRx(spinThreshold?: number): RawRx | null {
+	public acquireRx(spinThreshold?: number): RawRx<Buffer> | null {
 		return this.#handle.acquireRxBlocking(spinThreshold);
 	}
 

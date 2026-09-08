@@ -18,7 +18,7 @@ async function main(){
 		resolve(TARGET_DIR, "tachyon.wasm")
 	);
 
-	const jsBody = await readFile(resolve(BUILD_DIR, 'tachyon.js'), 'utf8');
+	const jsBody = (await readFile(resolve(BUILD_DIR, 'tachyon.js'), 'utf8')).replace(/[\t ]+$/gm, '');
 	await writeFile(
 		resolve(TARGET_DIR, "tachyon.js"),
 		`${GENERATED_HEADER}\n${jsBody}`

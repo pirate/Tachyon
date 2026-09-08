@@ -57,6 +57,7 @@ if (EMSCRIPTEN)
 	target_link_libraries(tachyon_wasm PRIVATE -Wl,--whole-archive tachyon -Wl,--no-whole-archive)
 	target_link_options(tachyon_wasm PRIVATE
 			"-sALLOW_MEMORY_GROWTH=1"
+			"-sABORTING_MALLOC=0"
 			"-sMODULARIZE=1"
 			"-sEXPORT_ES6=1"
 			"-sEXPORT_NAME=TachyonCore"
