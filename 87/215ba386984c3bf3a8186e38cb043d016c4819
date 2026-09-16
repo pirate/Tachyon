@@ -1,0 +1,21 @@
+bindings/js/src/ts/browser_bindings.ts
+  s_a90d1204e0ed5e::t_a14a9dd18f889c 117,207,219-220,235
+bindings/js/test/browser_wasm.spec.mjs
+  s_a90d1204e0ed5e::t_a1c8d34411d69a 219-241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "87215ba386984c3bf3a8186e38cb043d016c4819",
+  "prompts": {},
+  "sessions": {
+    "s_a90d1204e0ed5e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07fb4-134a-7340-b7d7-ca6b3b9ea8df",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Nick Sweeting <git@sweeting.me>"
+    }
+  }
+}
