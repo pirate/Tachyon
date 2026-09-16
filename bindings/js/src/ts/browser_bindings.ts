@@ -114,6 +114,7 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 		#endpoint: BrowserEndpoint;
 		#path: string;
 		#batchBuffers: ArrayBuffer[] = [];
+		#batchActive = false;
 		#closed = false;
 		#txSize = 0;
 
@@ -203,7 +204,7 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 
 		public drainBatch(maxMsgs: number): RawBatchMessage[] {
 			validateUint(maxMsgs, MAX_CAPACITY, 'maxMsgs');
-			if (this.#batchBuffers.length) throw new Error('Bus: an RX batch is already active.');
+			if (this.#batchActive) throw new Error('Bus: an RX batch is already active.');
 			const messages: RawBatchMessage[] = [];
 			for (let i = 0; i < maxMsgs; i += 1) {
 				const result = this.acquireRx();
@@ -215,6 +216,8 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 				messages.push({ data, typeId: result.typeId, size: result.actualSize });
 				this.commitRx();
 			}
+			// An empty batch still owns its commit callback until it is released.
+			this.#batchActive = true;
 			return messages;
 		}
 
@@ -229,6 +232,7 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 				detachArrayBuffer(buffer);
 			}
 			this.#batchBuffers = [];
+			this.#batchActive = false;
 		}
 
 		public setPollingMode(spinMode: number): void {

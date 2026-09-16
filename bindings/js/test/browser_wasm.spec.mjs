@@ -216,6 +216,29 @@ record("overlapping batches cannot invalidate each other's buffers", () => {
   second.commit();
 });
 
+record("empty batches retain ownership until committed", () => {
+  const bus = Bus.listen("/browser/empty-batch-lifetime", 1024);
+  const empty = bus.drainBatch(1);
+  assert.equal(empty.length, 0);
+  bus.send(new Uint8Array([42]), 7);
+  assert.throws(() => bus.drainBatch(1), /already active/);
+  empty.commit();
+
+  const live = bus.drainBatch(1);
+  const saved = live.at(0).data;
+  empty.commit();
+  assert.equal(saved.byteLength, 1);
+  assert.equal(saved[0], 42);
+  live.commit();
+  assert.equal(saved.byteLength, 0);
+
+  const zeroLimit = bus.drainBatch(0);
+  assert.throws(() => bus.drainBatch(1), /already active/);
+  zeroLimit.commit();
+  bus.drainBatch(1).commit();
+  bus.close();
+});
+
 record("ring counters survive more than 4 GiB of cumulative wasm32 traffic", () => {
   const bus = Bus.listen("/browser/wrap", 1 << 20);
   for (let i = 0; i < 32770; i++) {
