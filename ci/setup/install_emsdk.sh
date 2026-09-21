@@ -7,14 +7,16 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EMSDK_DIR="${PROJECT_ROOT}/.emsdk"
 
 echo "[emsdk] Preparing Emscripten SDK (${EMSDK_VERSION}) in ${EMSDK_DIR}..."
+if [[ -x "${EMSDK_DIR}/upstream/emscripten/emcc" && -f "${EMSDK_DIR}/.emscripten" ]]; then
+	echo "[emsdk] Already installed, nothing to do."
+	exit 0
+fi
 
 if [[ ! -d "${EMSDK_DIR}" ]]; then
 	echo "[emsdk] Cloning emsdk repository..."
-	git clone https://github.com/emscripten-core/emsdk.git "${EMSDK_DIR}"
+	git clone https://github.com/emscripten-core/emsdk.git "${EMSDK_DIR}" --depth 1
 else
-	echo "[emsdk] Directory already exists. Pulling latest updates..."
-	cd "${EMSDK_DIR}"
-	git pull origin main
+	echo "[emsdk] Reusing existing checkout."
 fi
 
 cd "${EMSDK_DIR}"
