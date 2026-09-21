@@ -19,7 +19,7 @@ namespace tachyon::core::test {
 		uint32_t qty;
 	};
 
-	class ArenaTest : public ::testing::Test {
+	class ArenaTest : public testing::Test {
 	protected:
 		const std::string			test_name		  = "tachyon_test_arena";
 		const size_t				arena_capacity	  = 4096;
@@ -236,6 +236,7 @@ namespace tachyon::core::test {
 		EXPECT_TRUE(producer.commit_tx(32, 1));
 	}
 
+#if !defined(__EMSCRIPTEN__)
 	TEST_F(ArenaTest, ConcurrentStress) {
 		auto producer = Arena::format(shm_owner->data(), arena_capacity).value();
 		auto consumer = Arena::attach(shm_owner->data()).value();
@@ -319,6 +320,7 @@ namespace tachyon::core::test {
 
 		t_cons.join();
 	}
+#endif // #if !defined(__EMSCRIPTEN__)
 
 	TEST_F(ArenaTest, BatchProcessing) {
 		auto producer = Arena::format(shm_owner->data(), arena_capacity).value();
