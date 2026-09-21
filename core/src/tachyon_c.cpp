@@ -279,7 +279,11 @@ tachyon_commit_rx_batch(tachyon_bus_t *bus, const tachyon_msg_view_t *views, con
 	}
 
 	const auto *cxx_views = reinterpret_cast<const RxView *>(views);
-	return bus->arena.commit_rx_batch(cxx_views, count) ? TACHYON_SUCCESS : TACHYON_ERR_SYSTEM;
+	const bool	committed = bus->arena.commit_rx_batch(cxx_views, count);
+#if defined(__EMSCRIPTEN__)
+	bus->arena.flush_rx();
+#endif // #if defined(__EMSCRIPTEN__)
+	return committed ? TACHYON_SUCCESS : TACHYON_ERR_SYSTEM;
 }
 
 void tachyon_bus_set_polling_mode(const tachyon_bus_t *bus, const int pure_spin) TACHYON_NOEXCEPT {
@@ -311,6 +315,7 @@ tachyon_error_t tachyon_bus_stats(const tachyon_bus_t *bus, tachyon_bus_stats_t 
 	return TACHYON_SUCCESS;
 }
 
+#if defined(__EMSCRIPTEN__)
 void *tachyon_bus_get_shm_ptr(const tachyon_bus_t *bus) TACHYON_NOEXCEPT {
 	if (!bus) [[unlikely]] {
 		return nullptr;
@@ -318,4 +323,5 @@ void *tachyon_bus_get_shm_ptr(const tachyon_bus_t *bus) TACHYON_NOEXCEPT {
 
 	return bus->shm.get_ptr();
 }
+#endif // #if defined(__EMSCRIPTEN__)
 } // extern "C"

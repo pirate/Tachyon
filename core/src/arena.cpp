@@ -190,11 +190,14 @@ namespace tachyon::core {
 	}
 
 	std::byte *Arena::acquire_tx(const size_t max_size) noexcept {
+		const size_t capacity = capacity_mask_ + 1;
+		if (max_size > capacity - sizeof(MessageHeader)) [[unlikely]]
+			return nullptr;
+
 		const size_t total_msg_size = sizeof(MessageHeader) + max_size;
 		const size_t aligned_msg_size =
 			(total_msg_size + (TACHYON_MSG_ALIGNMENT - 1)) & ~(TACHYON_MSG_ALIGNMENT - 1ULL);
-		const size_t capacity = capacity_mask_ + 1;
-		if (aligned_msg_size > capacity || max_size > SKIP_MARKER - sizeof(MessageHeader)) [[unlikely]]
+		if (aligned_msg_size > capacity) [[unlikely]]
 			return nullptr;
 
 		size_t		 physical_idx	 = local_head_ & capacity_mask_;
