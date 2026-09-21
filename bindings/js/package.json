@@ -26,7 +26,7 @@
 	"scripts": {
 		"build": "npm run build:native && npm run build:ts",
 		"build:native": "cmake-js compile",
-		"build:ts": "tsc && node scripts/stage-wasm.mjs",
+		"build:ts": "tsc",
 		"build:wasm": "cd ../.. && cmake --preset emscripten-release && cmake --build --preset emscripten-release --target tachyon_wasm_stage",
 		"clean": "rm -rf build dist",
 		"format": "prettier --write src/ts test/",
@@ -35,9 +35,10 @@
 		"lint": "eslint src/ts",
 		"prebuild": "cmake-js compile --runtime node --runtime-version $(node -v | cut -c2-)",
 		"test": "mocha",
-		"pretest:browser": "npm run build:ts",
+		"pretest:browser": "npm run build:ts && npm run stage:wasm",
+		"stage:wasm": "node scripts/stage-wasm.mjs",
 		"test:browser": "node test/browser_wasm.spec.mjs",
-		"test:package": "npm run build:ts && node test/package.spec.mjs"
+		"test:package": "npm run build:ts && npm run stage:wasm && node test/package.spec.mjs"
 	},
 	"dependencies": {
 		"node-addon-api": "^8.7.0"
@@ -74,6 +75,7 @@
 	"files": [
 		"dist",
 		"src/native",
+		"src/ts",
 		"CMakeLists.txt",
 		"README.md",
 		"LICENSE",

@@ -416,6 +416,7 @@ jobs:
           npm ci --ignore-scripts
           npm run build:wasm
           npm run build:ts
+          npm run stage:wasm
 
       - name: Publish to NPM
         working-directory: bindings/js
