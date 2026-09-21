@@ -91,13 +91,14 @@ const message = consumer.recv();
 if (message) console.log(message.data, message.typeId);
 ```
 
-The browser build runs the same C++ core compiled to WebAssembly with Emscripten, so the ring engine is identical to the
-native binding — there is no second implementation to keep in sync.
+The browser build runs the same C++ core compiled to WebAssembly with Emscripten, so message framing, header validation,
+and cursor arithmetic are the same fuzzed code as the native binding. The attach path is not: a page has no file
+descriptors, so `connect()` aliases the local ring instead of running the handshake.
 
 Browsers do not expose POSIX shared memory or UNIX sockets, so `socketPath` is a page-local endpoint key rather than a
-filesystem socket. `listen()` creates the in-page WASM ring and `connect()` attaches to that ring. The message layout
-still uses Tachyon's 64-byte header, `type_id`, alignment, and skip-marker rules. Capacities are capped at 2GB because
-wasm32 pointers are 32-bit. Capacity must be a power of two; the largest supported ring is 1 GiB.
+filesystem socket. `listen()` creates the in-page WASM ring; `connect()` takes a second handle onto it. The message
+layout still uses Tachyon's 64-byte header, `type_id`, alignment, and skip-marker rules. Capacity must be a power of
+two and no larger than `INT32_MAX` (`size_t` is 32-bit on wasm32), so the largest usable ring is 2^30 (1 GiB).
 
 The browser implementation is intentionally direct-doorbell oriented. After JavaScript commits a message, call the WASM
 work function immediately instead of scheduling a browser event or spinning in a poll loop. This avoids event-loop
@@ -109,12 +110,12 @@ Browser differences:
 - Repeated browser `connect()` calls return aliases to the same page-local ring; they are not independent subscribers,
   and multiple consumers compete for the same ordered SPSC stream.
 - `recv()` and `acquireRx()` are non-blocking because the main browser thread cannot park like a native futex wait.
-- Browser `drainBatch()` preserves order but copies batch entries before returning, so ring slots are released
-  immediately; use `acquireRx()` for a direct WASM memory view.
+- Browser `drainBatch()` is zero-copy and non-blocking: entries point into WASM memory, slots are released on `commit()`
 - `setNumaNode()` is a no-op; `setPollingMode()` forwards the core hint without enabling blocking waits.
 - A bus permits one active TX guard and one active RX guard across its aliases. Close releases its reservations.
-- Zero-copy WASM views cannot be detached individually. Never use a saved view after commit, rollback, or close;
-  creating another ring can grow memory and detach existing views. Allocate rings before acquiring guards.
+- WASM memory cannot detach a single slot, so a view kept past its commit stays readable but aliases a slot the producer
+  may already have reused. Growing the heap detaches every view at once: `listen()` refuses while a guard is held, and
+  guards throw rather than return a dead window.
 - `Buffer` is not a browser primitive; returned data is a `Uint8Array`.
 - Native cross-process IPC still requires Node.js or another native binding.
 - The browser build uses wasm32 for now, so WASM pointers, capacities, and slot sizes are `u32`-bounded; it can move to
@@ -128,6 +129,7 @@ To call your own C++ exports, link them with `libtachyon.a` into one Emscripten 
 
 ```typescript
 import {createBrowserBindings} from '@tachyon-ipc/core/browser/bindings';
+
 const {Bus} = createBrowserBindings(await createMyModule());
 const inbound = Bus.listen('/inbound', 1 << 20);
 // Pass inbound.wasmPointer to C exports from this same module only.
