@@ -155,11 +155,35 @@ record("drainBatch returns ordered messages", () => {
   assert.deepEqual([...batch.at(1).data], [1, 2, 3, 4]);
   assert.deepEqual([...batch].map((msg) => msg.typeId), [100, 101, 102]);
   batch.commit();
-  assert.equal(cached.byteLength, 0);
+  assert.equal(cached.byteLength, 4);
   assert.throws(() => batch.at(0), /already been committed/);
 
   producer.close();
   consumer.close();
+});
+
+record("drainBatch drains more than one internal batch window", () => {
+  const bus = Bus.listen("/test/batch-window", 1 << 16);
+  const COUNT = 100;
+  for (let i = 0; i < COUNT; i += 1) {
+    const tx = bus.acquireTx(4);
+    new DataView(tx.bytes().buffer, tx.bytes().byteOffset, 4).setUint32(0, i, true);
+    tx.commitUnflushed(4, i);
+  }
+  bus.flush();
+
+  const batch = bus.drainBatch(COUNT);
+  assert.equal(batch.length, COUNT);
+  for (let i = 0; i < COUNT; i += 1) {
+    assert.equal(batch.at(i).typeId, i);
+    assert.equal(new DataView(batch.at(i).data.buffer, batch.at(i).data.byteOffset, 4).getUint32(0, true), i);
+  }
+  batch.commit();
+
+  const drained = bus.drainBatch(COUNT);
+  assert.equal(drained.length, 0);
+  drained.commit();
+  bus.close();
 });
 
 record("empty receive and wasm32 argument validation", () => {
@@ -181,6 +205,44 @@ record("empty receive and wasm32 argument validation", () => {
     bus.send(new Uint8Array([i]), i);
     assert.equal(bus.recv().data[0], i);
   }
+  bus.close();
+});
+
+record("a batch that crosses the ring wrap keeps its cursor consistent", () => {
+  const CAPACITY = 4096;
+  const bus = Bus.listen("/test/batch-wrap", CAPACITY);
+
+  const filler = bus.acquireTx(CAPACITY - 160);
+  filler.commit(CAPACITY - 160, 1);
+  const first = bus.drainBatch(4);
+  assert.equal(first.length, 1);
+  first.commit();
+
+  for (const typeId of [2, 3]) {
+    const tx = bus.acquireTx(64);
+    tx.bytes()[0] = typeId;
+    tx.commitUnflushed(64, typeId);
+  }
+  bus.flush();
+
+  const wrapped = bus.drainBatch(4);
+  assert.equal(wrapped.length, 2);
+  assert.equal(wrapped.at(0).typeId, 2);
+  assert.equal(wrapped.at(1).typeId, 3);
+  assert.equal(wrapped.at(0).data[0], 2);
+  assert.equal(wrapped.at(1).data[0], 3);
+  wrapped.commit();
+
+  const drained = bus.drainBatch(4);
+  assert.equal(drained.length, 0);
+  drained.commit();
+
+  const after = bus.acquireTx(64);
+  after.commit(64, 4);
+  const tail = bus.drainBatch(4);
+  assert.equal(tail.length, 1);
+  assert.equal(tail.at(0).typeId, 4);
+  tail.commit();
   bus.close();
 });
 
@@ -207,13 +269,14 @@ record("overlapping batches cannot invalidate each other's buffers", () => {
   const saved = first.at(0).data;
   assert.throws(() => bus.drainBatch(1), /already active/);
   first.commit();
-  assert.equal(saved.byteLength, 0);
+  assert.equal(saved.byteLength, 1);
+  assert.throws(() => first.at(0), /already been committed/);
   bus.send(new Uint8Array([2]), 2);
   const second = bus.drainBatch(1);
-  const savedSecond = second.at(0).data;
-  bus.close();
-  assert.equal(savedSecond.byteLength, 0);
+  assert.equal(second.at(0).data[0], 2);
   second.commit();
+  assert.throws(() => second.at(0), /already been committed/);
+  bus.close();
 });
 
 record("empty batches retain ownership until committed", () => {
@@ -230,7 +293,8 @@ record("empty batches retain ownership until committed", () => {
   assert.equal(saved.byteLength, 1);
   assert.equal(saved[0], 42);
   live.commit();
-  assert.equal(saved.byteLength, 0);
+  assert.equal(saved.byteLength, 1);
+  assert.throws(() => live.at(0), /already been committed/);
 
   const zeroLimit = bus.drainBatch(0);
   assert.throws(() => bus.drainBatch(1), /already active/);
@@ -261,14 +325,12 @@ record("custom modules share the wrapper and raw C ABI", () => {
   const cells = raw._malloc(64);
   const shm = raw.cwrap("tachyon_bus_get_shm_ptr", "number", ["number"])(bus.wasmPointer);
   assert.equal(shm % 128, 0);
-  const receive = raw.cwrap("tachyon_acquire_rx_blocking", "number", ["number", "number", "number", "number"]);
-  const drain = raw.cwrap("tachyon_drain_batch", "number", ["number", "number", "number", "number"]);
-  assert.equal(receive(bus.wasmPointer, cells, cells + 4, 0), 0);
-  assert.equal(drain(bus.wasmPointer, cells, 1, 0), 0);
-  const spin = raw.cwrap("tachyon_acquire_rx_spin", "number", ["number", "number", "number", "number"]);
-  assert.equal(spin(bus.wasmPointer, cells, cells + 4, 0), 0);
+  const receive = raw.cwrap("tachyon_acquire_rx", "number", ["number", "number", "number"]);
+  const drain = raw.cwrap("tachyon_acquire_rx_batch", "number", ["number", "number", "number"]);
+  assert.equal(receive(bus.wasmPointer, cells, cells + 4), 0);
+  assert.equal(drain(bus.wasmPointer, cells, 1), 0);
   bus.send(new Uint8Array([42]), 123);
-  const ptr = receive(bus.wasmPointer, cells, cells + 4, 0);
+  const ptr = receive(bus.wasmPointer, cells, cells + 4);
   assert.equal(raw.HEAPU8[ptr], 42);
   assert.equal(raw.getValue(cells, "i32"), 123);
   raw.cwrap("tachyon_commit_rx", "number", ["number"])(bus.wasmPointer);

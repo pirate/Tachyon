@@ -151,6 +151,8 @@ bindings/java/src/native/_core_local/
 bindings/java/build/
 .gradle/
 bindings/js/src/native/_core_local/
+bindings/js/src/ts/wasm/tachyon.js
+bindings/js/src/ts/wasm/tachyon.wasm
 bindings/python/_core_local/
 bindings/python/_dlpack_local/
 bindings/rust/tachyon-sys/vendor/

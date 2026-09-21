@@ -112,6 +112,7 @@ export abstract class BusBase<T extends Uint8Array> implements Disposable {
 	 *
 	 * @returns The next message, or `null` when no message is available (browser only).
 	 * @throws {PeerDeadError} If the bus has transitioned to fatal error state.
+	 * @remarks The slot is released even if the copy throws.
 	 */
 	public recv(spinThreshold = this.#options.defaultSpinThreshold): { data: T; typeId: number } | null {
 		this.#assertOpen();
@@ -123,9 +124,12 @@ export abstract class BusBase<T extends Uint8Array> implements Disposable {
 				return null;
 			}
 
-			const copy = this.#options.copyData(result.data);
-			this.#handle.commitRx();
-			return { data: copy, typeId: result.typeId };
+			try {
+				const copy = this.#options.copyData(result.data);
+				return { data: copy, typeId: result.typeId };
+			} finally {
+				this.#handle.commitRx();
+			}
 		}
 	}
 
@@ -174,9 +178,8 @@ export abstract class BusBase<T extends Uint8Array> implements Disposable {
 	}
 
 	/**
-	 * Drains up to `maxMsgs` messages. Native Node uses one addon call to
-	 * amortize FFI cost; browser WASM falls back to the same guard lifecycle
-	 * with copied batch entries so all slots are released before returning.
+	 * Drains up to `maxMsgs` messages in one call across the boundary. Both
+	 * transports are zero-copy; the slots are released on commit.
 	 */
 	public drainBatch(maxMsgs: number, spinThreshold = this.#options.defaultSpinThreshold): RxBatch<T> {
 		this.#assertOpen();
@@ -216,13 +219,17 @@ export abstract class BusBase<T extends Uint8Array> implements Disposable {
 			if (this.#isFatal()) throw new PeerDeadError();
 			const result = this.#handle.acquireRx(spinThreshold);
 			if (result === null) break;
-			messages.push({
-				data: this.#options.copyData(result.data),
-				typeId: result.typeId,
-				size: result.actualSize,
-			});
-			this.#handle.commitRx();
+			try {
+				messages.push({
+					data: this.#options.copyData(result.data),
+					typeId: result.typeId,
+					size: result.actualSize,
+				});
+			} finally {
+				this.#handle.commitRx();
+			}
 		}
+
 		return messages;
 	}
 

@@ -6,12 +6,17 @@ import type { CwrapFn, TachyonCoreModule } from './wasm/tachyon.js';
 const TACHYON_SUCCESS = 0;
 
 /**
- * wasm32 pointers and `size_t` are 32-bit, so the core rejects any capacity
- * larger than `INT32_MAX` (see `tachyon_bus_listen` / `SharedMemory::create`).
- * We reject the same boundary here, at the JS API surface, with a clean
- * exception so a 2GB+ request never reaches the core as a silent overflow.
+ * `size_t` is 32-bit on wasm32, so the core rejects any capacity above `INT32_MAX`. Combined with the power-of-two
+ * rule, the largest usable ring is 2^30 (1 GiB). Rejected here too so an oversized request fails as a validation
+ * error rather than reaching the core.
  */
-const MAX_CAPACITY = 0x7fff_ffff; // 2 GiB - 1
+const MAX_CAPACITY = 0x7fff_ffff; // INT32_MAX
+const MAX_BATCH_MSGS = 65_536;
+
+const MSG_VIEW_SIZE = 32;
+const VIEW_PTR = 0;
+const VIEW_SIZE = 4;
+const VIEW_TYPE_ID = 12;
 
 function validateUint(value: number, max: number, name: string): void {
 	if (!Number.isInteger(value) || value < 0 || value > max) {
@@ -26,12 +31,28 @@ function mapError(code: number): ErrorCode {
 			return ErrorCode.NullPtr;
 		case 2:
 			return ErrorCode.Mem;
+		case 3:
+			return ErrorCode.Open;
+		case 4:
+			return ErrorCode.Truncate;
+		case 5:
+			return ErrorCode.Chmod;
+		case 6:
+			return ErrorCode.Seal;
+		case 7:
+			return ErrorCode.Map;
 		case 8:
 			return ErrorCode.InvalidSz;
 		case 9:
 			return ErrorCode.Full;
 		case 10:
 			return ErrorCode.Empty;
+		case 11:
+			return ErrorCode.Network;
+		case 13:
+			return ErrorCode.Interrupted;
+		case 14:
+			return ErrorCode.AbiMismatch;
 		default:
 			return ErrorCode.System;
 	}
@@ -61,6 +82,8 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 		getShmPtr: CwrapFn;
 		acquireTx: CwrapFn;
 		commitTx: CwrapFn;
+		acquireRxBatch: CwrapFn;
+		commitRxBatch: CwrapFn;
 		rollbackTx: CwrapFn;
 		acquireRx: CwrapFn;
 		commitRx: CwrapFn;
@@ -76,6 +99,8 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 		rollbackTx: core.cwrap('tachyon_rollback_tx', 'number', ['number']),
 		acquireRx: core.cwrap('tachyon_acquire_rx', 'number', ['number', 'number', 'number']),
 		commitRx: core.cwrap('tachyon_commit_rx', 'number', ['number']),
+		acquireRxBatch: core.cwrap('tachyon_acquire_rx_batch', 'number', ['number', 'number', 'number']),
+		commitRxBatch: core.cwrap('tachyon_commit_rx_batch', 'number', ['number', 'number', 'number']),
 		flush: core.cwrap('tachyon_flush', null, ['number']),
 		getState: core.cwrap('tachyon_get_state', 'number', ['number']),
 		setPollingMode: core.cwrap('tachyon_bus_set_polling_mode', null, ['number', 'number']),
@@ -95,9 +120,28 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 		return new Uint8Array(core.HEAPU8.buffer, ptr, len);
 	}
 
-	function detachArrayBuffer(buffer: ArrayBuffer): void {
-		if (buffer.byteLength === 0) return;
-		structuredClone(buffer, { transfer: [buffer] });
+	// Scratch array of tachyon_msg_view_t for drainBatch. Grown on demand, never
+	// shrunk (allocating can grow the heap and detach every live view), so it must
+	// happen before any view is taken rather than between calls
+	let batchScratch = 0;
+	let batchScratchMsgs = 0;
+
+	function batchViews(maxMsgs: number): number {
+		if (maxMsgs <= batchScratchMsgs) {
+			return batchScratch;
+		}
+		const next = core._malloc(maxMsgs * MSG_VIEW_SIZE);
+		if (!next) {
+			throw new TachyonError('Cannot allocate the batch scratch.', ErrorCode.Mem);
+		}
+
+		if (batchScratch) {
+			core._free(batchScratch);
+		}
+
+		batchScratch = next;
+		batchScratchMsgs = maxMsgs;
+		return batchScratch;
 	}
 
 	interface BrowserEndpoint {
@@ -113,8 +157,8 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 	class BrowserBusHandle implements BusHandle {
 		#endpoint: BrowserEndpoint;
 		#path: string;
-		#batchBuffers: ArrayBuffer[] = [];
-		#batchActive = false;
+		#batchOpen = false;
+		#batchCount = 0;
 		#closed = false;
 		#txSize = 0;
 
@@ -125,6 +169,9 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 
 		get #bus(): number {
 			if (this.#closed) throw new Error('Bus: this bus has been closed.');
+			if (this.#endpoint.busPtr === 0) {
+				throw new Error('Bus: the underlying endpoint has been destroyed.');
+			}
 			return this.#endpoint.busPtr;
 		}
 
@@ -174,11 +221,12 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 		}
 
 		public commitTxUnflushed(actualSize: number, typeId: number): void {
+			if (this.#endpoint.txOwner !== this) throw new Error('Bus: no active TX guard.');
 			validateUint(actualSize, this.#txSize, 'actualSize');
 			validateUint(typeId, 0xffff_ffff, 'typeId');
-			if (this.#endpoint.txOwner !== this) throw new Error('Bus: no active TX guard.');
 			const rc = abi.commitTx(this.#bus, actualSize, typeId);
 			delete this.#endpoint.txOwner;
+			this.#txSize = 0;
 			if (rc !== TACHYON_SUCCESS) throw new TachyonError('Bus: TX commit failed.', mapError(rc));
 		}
 
@@ -186,6 +234,7 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 			if (this.#endpoint.txOwner !== this) return;
 			abi.rollbackTx(this.#bus);
 			delete this.#endpoint.txOwner;
+			this.#txSize = 0;
 		}
 
 		public flush(): void {
@@ -203,21 +252,26 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 		}
 
 		public drainBatch(maxMsgs: number): RawBatchMessage[] {
-			validateUint(maxMsgs, MAX_CAPACITY, 'maxMsgs');
-			if (this.#batchActive) throw new Error('Bus: an RX batch is already active.');
-			const messages: RawBatchMessage[] = [];
-			for (let i = 0; i < maxMsgs; i += 1) {
-				const result = this.acquireRx();
-				if (result === null) break;
+			validateUint(maxMsgs, MAX_BATCH_MSGS, 'maxMsgs');
+			if (this.#batchOpen) throw new Error('Bus: an RX batch is already active.');
+			if (this.#endpoint.rxOwner) throw new Error('Bus: an RX guard is already active.');
 
-				// Copy out of the ring before committing so the slot can be reused.
-				const data = new Uint8Array(result.data);
-				this.#batchBuffers.push(data.buffer);
-				messages.push({ data, typeId: result.typeId, size: result.actualSize });
-				this.commitRx();
+			const views = batchViews(maxMsgs);
+			const count = abi.acquireRxBatch(this.#bus, views, maxMsgs);
+			this.#batchOpen = true;
+			this.#batchCount = count;
+
+			const messages: RawBatchMessage[] = [];
+			for (let i = 0; i < count; i += 1) {
+				const view = views + i * MSG_VIEW_SIZE;
+				const size = core.getValue(view + VIEW_SIZE, 'i32') >>> 0;
+				messages.push({
+					data: slot(core.getValue(view + VIEW_PTR, 'i32'), size),
+					typeId: core.getValue(view + VIEW_TYPE_ID, 'i32') >>> 0,
+					size,
+				});
 			}
-			// An empty batch still owns its commit callback until it is released.
-			this.#batchActive = true;
+
 			return messages;
 		}
 
@@ -228,11 +282,11 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 		}
 
 		public commitBatch(): void {
-			for (const buffer of this.#batchBuffers) {
-				detachArrayBuffer(buffer);
-			}
-			this.#batchBuffers = [];
-			this.#batchActive = false;
+			if (!this.#batchOpen) return;
+			this.#batchOpen = false;
+			const count = this.#batchCount;
+			this.#batchCount = 0;
+			abi.commitRxBatch(this.#bus, batchScratch, count);
 		}
 
 		public setPollingMode(spinMode: number): void {
@@ -283,11 +337,8 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 	/**
 	 * Browser implementation of the Tachyon SPSC bus.
 	 *
-	 * Bundlers resolve `@tachyon-ipc/core` to this entry through the package
-	 * `browser` export condition. The constructor shape matches Node:
-	 * `Bus.listen(path, capacity)` creates a page-local ring and
-	 * `Bus.connect(path)` attaches to it. Both share one `tachyon_bus_t`, so the
-	 * single fuzzed C++ ring is the only engine in play.
+	 * The ring is the fuzzed C++ engine, but the attach path is not: a page has no fds, so `tachyon_bus_connect`,
+	 * `Arena::attach` and the handshake checks never run here. An ABI mismatch is undetectable on this transport.
 	 */
 	class Bus extends BusBase<Uint8Array> {
 		readonly #handle: BrowserBusHandle;
@@ -318,7 +369,7 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 			}
 			if (capacity > MAX_CAPACITY) {
 				throw new TachyonError(
-					`Bus.listen: capacity ${capacity} exceeds the 2GB limit for wasm32 builds.`,
+					`Bus.listen: capacity ${capacity} exceeds the wasm32 limit of ${MAX_CAPACITY}. `,
 					ErrorCode.InvalidSz,
 				);
 			}
@@ -329,12 +380,25 @@ export function createBrowserBindings(core: TachyonCoreModule): BrowserBindings 
 				throw new Error(`Bus.listen: browser endpoint already exists for ${socketPath}`);
 			}
 
+			if ([...endpoints.values()].some((e) => e.txOwner !== undefined || e.rxOwner !== undefined)) {
+				throw new Error(
+					'Bus.listen: a TX or RX guard is active. Allocating a ring can grow WASM memory and detach ' +
+						'every existing view, release all guards first.',
+				);
+			}
+
 			const busPtr = listenBus(socketPath, capacity);
 			const endpoint: BrowserEndpoint = { busPtr, refs: 1 };
 			endpoints.set(socketPath, endpoint);
 			return new Bus(socketPath, endpoint);
 		}
 
+		/**
+		 * Second handle onto the ring `Bus.listen` created at this path. No socket, no handshake, just a refcount.
+		 * SPSC is upheld by the guard exclusion in this file, not by process separation.
+		 *
+		 * @throws {Error} If no bus is listening at `socketPath`.
+		 */
 		public static connect(socketPath: string): Bus {
 			const endpoint = endpoints.get(socketPath);
 			if (endpoint === undefined) {

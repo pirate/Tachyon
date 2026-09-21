@@ -46,21 +46,44 @@ void createBrowserBindings;
 `,
 	);
 	writeFileSync(
+		join(fixture, 'check-bundler.ts'),
+		`
+import {Bus} from '@tachyon-ipc/core';
+const bus = Bus.listen('typed', 1024);
+const bytes: Uint8Array = bus.acquireTx(4).bytes();
+// @ts-expect-error The browser condition must not resolve to the Node types.
+bytes.writeUInt32LE(1);
+`,
+	);
+	const baseOptions = {
+		target: 'ES2022',
+		strict: true,
+		noEmit: true,
+		types: [],
+		lib: ['ES2022', 'DOM', 'ESNext.Disposable'],
+	};
+	writeFileSync(
 		join(fixture, 'tsconfig.json'),
 		JSON.stringify({
-			compilerOptions: {
-				target: 'ES2022',
-				module: 'NodeNext',
-				moduleResolution: 'NodeNext',
-				strict: true,
-				noEmit: true,
-				types: [],
-				lib: ['ES2022', 'DOM', 'ESNext.Disposable'],
-			},
+			compilerOptions: { ...baseOptions, module: 'NodeNext', moduleResolution: 'NodeNext' },
 			include: ['check.ts'],
 		}),
 	);
-	run(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '-p', fixture]);
+	writeFileSync(
+		join(fixture, 'tsconfig.bundler.json'),
+		JSON.stringify({
+			compilerOptions: {
+				...baseOptions,
+				module: 'Preserve',
+				moduleResolution: 'bundler',
+				customConditions: ['browser'],
+			},
+			include: ['check-bundler.ts'],
+		}),
+	);
+	const tsc = join(root, 'node_modules/typescript/bin/tsc');
+	run(process.execPath, [tsc, '-p', fixture]);
+	run(process.execPath, [tsc, '--project', join(fixture, 'tsconfig.bundler.json')]);
 	process.stdout.write(
 		run(process.execPath, [join(root, 'test/browser_wasm.spec.mjs')], {
 			env: {
@@ -69,7 +92,7 @@ void createBrowserBindings;
 			},
 		}),
 	);
-	console.log('ok - packed browser assets and TypeScript consumer without Node types');
+	console.log('ok - packed browser assets, /browser under NodeNext and the root entry under bundler');
 } finally {
 	rmSync(fixture, { recursive: true, force: true });
 }

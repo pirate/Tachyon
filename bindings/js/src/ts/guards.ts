@@ -1,5 +1,12 @@
 import { PeerDeadError } from './error.ts';
 
+/** A detached ArrayBuffer (WASM) reports zero byteLength; a live slot never does. */
+function assertAttached(buffer: Uint8Array, what: string): void {
+	if (buffer.byteLength === 0) {
+		throw new Error(`${what}: the underlying buffer has been detached.`);
+	}
+}
+
 // Branded slot types, nominal subtypes of the underlying byte buffer.
 // Brand symbols are not accessible outside this module, so only
 // TxGuard and RxGuard can produce these types.
@@ -73,6 +80,7 @@ export class TxGuard<S extends Uint8Array = Uint8Array> {
 		}
 
 		this.#ctrl.assertOpen?.();
+		assertAttached(this.#buffer, 'TxGuard');
 		return this.#buffer;
 	}
 
@@ -164,6 +172,8 @@ export class RxGuard<S extends Uint8Array = Uint8Array> {
 	public data(): RxSlot<S> {
 		this.#assertOpen();
 		if (this.#ctrl.getState() === 4 /* TACHYON_STATE_FATAL_ERROR */) throw new PeerDeadError();
+		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+		assertAttached(this.#buffer!, 'RxGuard');
 		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 		return this.#buffer!;
 	}
