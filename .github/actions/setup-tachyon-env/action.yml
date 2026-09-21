@@ -46,16 +46,27 @@ runs:
       shell: bash
       run: brew install ccache
 
+    - name: Fingerprint host CPU
+      id: cpu
+      shell: bash
+      run: |
+        if [ -r /proc/cpuinfo ]; then
+          id=$(grep -m1 -E '^(flags|Features)' /proc/cpuinfo)
+        else
+          id=$(sysctl -n machdep.cpu.brand_string)
+        fi
+        echo "key=$(echo "$id" | cksum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
     - name: Configure ccache
       uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
-        key: ccache-${{ runner.os }}-${{ github.job }}-${{ inputs.compiler }}-${{ inputs.build-type }}-sanitizer_${{ inputs.sanitizer }}-${{ github.sha }}
+        key: ccache-${{ runner.os }}-cpu_${{ steps.cpu.outputs.key }}-${{ github.job }}-${{ inputs.compiler }}-${{ inputs.build-type }}-sanitizer_${{ inputs.sanitizer }}-${{ github.sha }}
         path: |
           ~/.cache/ccache
           ~/Library/Caches/ccache
         restore-keys: |
-          ccache-${{ runner.os }}-${{ github.job }}-${{ inputs.compiler }}-${{ inputs.build-type }}-sanitizer_${{ inputs.sanitizer }}-
-          ccache-${{ runner.os }}-${{ github.job }}-
+          ccache-${{ runner.os }}-cpu_${{ steps.cpu.outputs.key }}-${{ github.job }}-${{ inputs.compiler }}-${{ inputs.build-type }}-sanitizer_${{ inputs.sanitizer }}-
+          ccache-${{ runner.os }}-cpu_${{ steps.cpu.outputs.key }}-${{ github.job }}-
 
     - name: Setup Kitware APT repository (Linux)
       if: runner.os == 'Linux'
